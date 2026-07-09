@@ -461,6 +461,10 @@ function render(st){
 
   if(lastCount!==null && st.updates.length>lastCount) beep();
   lastCount = st.updates.length;
+
+  // 合集下载进度
+  const mp=(st.mix_progress||[])[0];
+  if(mp) toast(`合集《${mp.name}》下载中 ${mp.done}/${mp.total}`);
 }
 
 function emptyBox(icon,t,d){return `<div class="empty" style="grid-column:1/-1"><div class="big">${icon}</div><div style="font-size:16px;color:var(--txt)">${t}</div><div style="margin-top:5px">${d}</div></div>`}
@@ -803,6 +807,15 @@ function openPlayer(aid, type, desc, localSrc){
   }else{
     const src=localSrc||('/api/stream/'+aid);
     body.innerHTML=`<video controls autoplay playsinline src="${esc(src)}"></video>`;
+    // 视频若属于合集，加"下载整个合集"按钮
+    if(aid) api('/api/mix_info/'+aid).then(mx=>{
+      if(mx&&mx.in_mix){
+        const b=document.createElement('button'); b.className='btn';
+        b.innerHTML=`⬇ 下载整个合集《${esc(mx.mix_name)}》(${mx.total}集)`;
+        b.onclick=()=>downloadMix(aid);
+        foot.appendChild(b);
+      }
+    }).catch(()=>{});
   }
   m.classList.add('on');
 }
@@ -812,8 +825,22 @@ function closePlayer(){
 }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape')closePlayer(); });
 
+async function downloadMix(aid){
+  if(!await ensureDownloadDir()) return;
+  try{
+    const d=await api('/api/download_mix','POST',{aweme_id:aid});
+    toast(`开始下载合集《${d.mix_name}》共 ${d.total} 集，下载库里陆续出现`);
+  }catch(e){ uiAlert(e.message); }
+}
+
 async function downloadUpdate(btn, sec, aid){
   if(!await ensureDownloadDir()) return;
+  let mix=null; try{ mix=await api('/api/mix_info/'+aid); }catch(e){}
+  if(mix && mix.in_mix){
+    if(await uiConfirm(`这条属于合集《${mix.mix_name}》共 ${mix.total} 集。\n下载整个合集？（点取消只下这一条）`,'下载整个合集')){
+      downloadMix(aid); return;
+    }
+  }
   const old=btn.innerHTML; btn.disabled=true; btn.textContent='下载中…';
   try{
     const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:[aid]});

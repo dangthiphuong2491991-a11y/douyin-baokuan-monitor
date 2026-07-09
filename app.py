@@ -19,6 +19,14 @@ from pydantic import BaseModel
 from f2.apps.douyin.handler import DouyinHandler
 from f2.apps.douyin.utils import TokenManager, SecUserIdFetcher, AwemeIdFetcher
 
+
+# 禁用 f2 自带的 Bark 通知：我们没用它，它每次失败重试拖慢 fetch_one_video 等操作
+async def _no_bark(self, *a, **k):
+    return None
+
+
+DouyinHandler._send_bark_notification = _no_bark
+
 AID_RE = r"(?:modal_id=|/video/|/note/|/share/video/|/share/note/)(\d{6,})"
 
 
@@ -63,7 +71,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -496,6 +504,7 @@ def api_status():
         "dir_chosen": bool(config.get("download_dir")),
         "logged_in": is_logged_in(),
         "version": VERSION,
+        "mix_progress": list(MIX_PROGRESS.values()),
     }
 
 
@@ -702,6 +711,73 @@ async def api_download_selected(body: DownloadBody):
             results.append({"aweme_id": aid, "ok": False, "err": str(e)[:80]})
     ok_n = sum(1 for r in results if r["ok"])
     return {"ok": True, "success": ok_n, "total": len(results), "results": results}
+
+
+MIX_PROGRESS = {}   # mix_id -> {name, done, total}
+
+
+def _mix_of(aweme: dict):
+    mi = (aweme or {}).get("mix_info") or {}
+    if not mi.get("mix_id"):
+        return None
+    st = mi.get("statis") or {}
+    return {"mix_id": mi["mix_id"], "mix_name": mi.get("mix_name") or "合集",
+            "total": st.get("updated_to_episode") or st.get("total_episode") or 0}
+
+
+@app.get("/api/mix_info/{aid}")
+async def api_mix_info(aid: str):
+    a = await resolve_aweme(aid)
+    m = _mix_of(a)
+    return {"in_mix": bool(m), **(m or {})}
+
+
+class MixBody(BaseModel):
+    aweme_id: str
+
+
+@app.post("/api/download_mix")
+async def api_download_mix(body: MixBody):
+    a = await resolve_aweme(body.aweme_id)
+    m = _mix_of(a)
+    if not m:
+        return JSONResponse({"error": "这条视频不属于任何合集"}, status_code=400)
+    author = a.get("author") or {}
+    nickname = _blogger_nickname(author.get("sec_uid", "")) or author.get("nickname") or "未知博主"
+    if m["mix_id"] in MIX_PROGRESS:
+        return {"ok": True, "total": m["total"], "mix_name": m["mix_name"], "already": True}
+    # 抓集 + 下载都放后台，接口立即返回（集数用合集元数据里的 total）
+    asyncio.create_task(_download_mix_bg(m["mix_id"], m["mix_name"], nickname, m["total"]))
+    return {"ok": True, "total": m["total"], "mix_name": m["mix_name"]}
+
+
+async def _download_mix_bg(mix_id, mix_name, nickname, total_hint):
+    MIX_PROGRESS[mix_id] = {"name": mix_name, "done": 0, "total": total_hint or 0}
+    episodes = []
+    try:
+        kw = make_kwargs()
+        kw["timeout"] = 10   # 缩短翻页间隔
+        h = DouyinHandler(kw)
+        async for mx in h.fetch_user_mix_videos(mix_id=mix_id, page_counts=20, max_counts=500):
+            episodes.extend(mx._to_raw().get("aweme_list") or [])
+    except Exception as e:
+        log_err(f"抓合集失败: {e}")
+    if episodes:
+        MIX_PROGRESS[mix_id]["total"] = len(episodes)
+    for ep in episodes:
+        try:
+            aw = ep if _has_media(ep) else None
+            if aw is None:
+                v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=str(ep.get("aweme_id")))
+                aw = (v._to_raw() or {}).get("aweme_detail")
+            if aw:
+                await download_aweme_media(nickname, aw)
+        except Exception as e:
+            log_err(f"合集下载一集失败: {e}")
+        MIX_PROGRESS[mix_id]["done"] += 1
+    print(f"[MIX] 合集《{mix_name}》完成 {MIX_PROGRESS[mix_id]['done']}/{len(episodes)}", flush=True)
+    await asyncio.sleep(10)
+    MIX_PROGRESS.pop(mix_id, None)
 
 
 class DiscoverBody(BaseModel):
