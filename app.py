@@ -48,18 +48,25 @@ async def resolve_aweme_id(text: str):
     except Exception:
         return None
 
-BASE = Path(__file__).parent
-DATA = BASE / "data"
-DL = BASE / "downloads"
+# 打包后(PyInstaller)与源码运行的路径不同：
+#   静态资源(static)在包内(_MEIPASS)；data/downloads 要放在 exe 旁边(持久、可写)
+if getattr(sys, "frozen", False):
+    BASE = Path(sys._MEIPASS)                 # 只读资源
+    APP_DIR = Path(sys.executable).parent     # 可写数据
+else:
+    BASE = Path(__file__).parent
+    APP_DIR = BASE
+DATA = APP_DIR / "data"
+DL = APP_DIR / "downloads"
 DATA.mkdir(exist_ok=True)
 DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
 VERSION = "1.0.0"
-# 更新检查：指向 GitHub 上的 version.json（建仓库后填真实地址）
-UPDATE_RAW_URL = ""   # 例如 https://raw.githubusercontent.com/<user>/<repo>/main/version.json
-RELEASE_PAGE = ""     # 例如 https://github.com/<user>/<repo>/releases
+# 更新检查：指向 GitHub 上的 version.json
+UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
+RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
