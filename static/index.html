@@ -255,14 +255,19 @@
               <span id="minLikeHint" style="color:var(--dim);margin-left:4px"></span>
             </label>
             <label style="color:var(--sub);font-size:13px">时间范围
-              <select id="hours" style="margin-left:6px">
+              <select id="hours" style="margin-left:6px" onchange="onHoursChange()">
                 <option value="24">最近 24 小时</option>
                 <option value="48">最近 48 小时</option>
                 <option value="72">最近 3 天</option>
                 <option value="168" selected>最近 7 天</option>
                 <option value="720">最近 30 天</option>
                 <option value="0">不限时间（按点赞排全部）</option>
+                <option value="custom">自定义…</option>
               </select>
+              <span id="hoursCustomWrap" style="display:none;margin-left:6px">最近
+                <input type="number" id="hoursCustomNum" value="3" min="1" style="width:64px;margin:0 4px">
+                <select id="hoursCustomUnit" style="padding:11px 8px"><option value="24">天</option><option value="1">小时</option></select>
+              </span>
             </label>
             <label id="pagesWrap" style="color:var(--sub);font-size:13px;display:none">抓取深度
               <select id="pages" style="margin-left:6px">
@@ -299,10 +304,7 @@
             <div class="l">
               <div class="t">下载保存位置</div>
               <div class="d">所有下载的视频都存到这里，并自动按博主名分类建子文件夹</div>
-              <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <input id="dlDirInput" style="min-width:340px;flex:1" placeholder="例如 D:\\抖音下载">
-                <button class="btn ghost" onclick="saveDir(this)">保存路径</button>
-              </div>
+              <div id="dlDirText" style="margin-top:8px;color:var(--txt);font-size:13px;word-break:break-all;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:9px 12px">—</div>
             </div>
             <button class="btn" onclick="chooseDir(this)">📂 选择文件夹</button>
           </div>
@@ -352,8 +354,47 @@
   </div>
 </div>
 
+<!-- 通用对话框（替代原生 alert/confirm/prompt） -->
+<div id="dlg" class="pmask" style="z-index:300">
+  <div class="pbox" style="max-width:440px">
+    <div class="ptitle" id="dlgTitle" style="padding-right:18px"></div>
+    <div id="dlgMsg" style="padding:2px 20px 8px;color:var(--sub);white-space:pre-wrap;line-height:1.7"></div>
+    <div id="dlgInputWrap" style="padding:4px 20px 8px;display:none"><input id="dlgInput" style="width:100%"></div>
+    <div class="pfoot" style="justify-content:flex-end;padding:12px 18px 16px">
+      <button class="btn ghost" id="dlgCancel">取消</button>
+      <button class="btn" id="dlgOk">确定</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let lastCount = null, curStatus = null;
+
+/* ---- 风格化对话框（替代原生 alert/confirm/prompt） ---- */
+function _dlg(o){
+  return new Promise(res=>{
+    const m=document.getElementById('dlg');
+    document.getElementById('dlgTitle').textContent=o.title||'提示';
+    const msgEl=document.getElementById('dlgMsg');
+    msgEl.textContent=o.msg||''; msgEl.style.display=o.msg?'block':'none';
+    const iw=document.getElementById('dlgInputWrap'), inp=document.getElementById('dlgInput');
+    iw.style.display=o.input?'block':'none';
+    if(o.input){ inp.value=o.def||''; inp.placeholder=o.placeholder||''; }
+    const ok=document.getElementById('dlgOk'), cc=document.getElementById('dlgCancel');
+    ok.textContent=o.okText||'确定'; cc.textContent=o.cancelText||'取消';
+    cc.style.display=o.showCancel?'inline-block':'none';
+    m.classList.add('on');
+    if(o.input) setTimeout(()=>inp.focus(),60);
+    const done=v=>{ m.classList.remove('on'); ok.onclick=cc.onclick=m.onclick=inp.onkeydown=null; res(v); };
+    ok.onclick=()=>done(o.input?inp.value:true);
+    cc.onclick=()=>done(o.input?null:false);
+    m.onclick=e=>{ if(e.target===m) done(o.input?null:false); };
+    inp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();done(o.input?inp.value:true);} if(e.key==='Escape')done(o.input?null:false); };
+  });
+}
+function uiAlert(msg,title){ return _dlg({title:title||'提示',msg:String(msg),showCancel:false,okText:'知道了'}); }
+function uiConfirm(msg,title){ return _dlg({title:title||'确认',msg:String(msg),showCancel:true}); }
+function uiPrompt(msg,opt){ opt=opt||{}; return _dlg({title:opt.title||'输入',msg:String(msg),input:true,def:opt.def,placeholder:opt.placeholder,showCancel:true}); }
 
 async function api(url, method='GET', body){
   const r = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
@@ -383,7 +424,7 @@ function render(st){
   document.getElementById('stBloggers').textContent = st.bloggers.length;
   document.getElementById('stUpdates').textContent = st.updates.length;
   const lc=document.getElementById('libCount'); if(lc) lc.textContent=st.bloggers.length;
-  const di=document.getElementById('dlDirInput'); if(di && document.activeElement!==di) di.value=st.download_dir||'';
+  const dt=document.getElementById('dlDirText'); if(dt) dt.textContent=st.download_dir||'—';
   const lb=document.getElementById('loginBadge'), lo=document.getElementById('logoutBtn');
   if(lb){ lb.textContent=st.logged_in?'已登录':'未登录'; lb.className='tag '+(st.logged_in?'ok':''); if(lo) lo.style.display=st.logged_in?'inline-block':'none'; }
 
@@ -505,7 +546,7 @@ async function downloadSelected(btn){
     selectedIds.clear();
     await openPosts(curPostsSec);
     setTimeout(()=>{btn.innerHTML=old;updateBar();},2200);
-  }catch(e){ alert(e.message); btn.innerHTML=old; btn.disabled=false; }
+  }catch(e){ uiAlert(e.message); btn.innerHTML=old; btn.disabled=false; }
 }
 
 /* ---- 查找爆款（库内 / 相关推荐 两种来源）---- */
@@ -517,6 +558,20 @@ let discItems=[], discSel=new Set(), discSrc='library';
   if(inp&&hint){ const upd=()=>{ const v=parseInt(inp.value)||0; hint.textContent=v>=10000?'（'+(v/10000).toFixed(1).replace(/\.0$/,'')+'万）':''; };
     inp.addEventListener('input',upd); upd(); }
 })();
+
+function onHoursChange(){
+  document.getElementById('hoursCustomWrap').style.display =
+    document.getElementById('hours').value==='custom' ? 'inline-block' : 'none';
+}
+function getHours(){
+  const sel=document.getElementById('hours').value;
+  if(sel==='custom'){
+    const n=parseInt(document.getElementById('hoursCustomNum').value)||1;
+    const unit=parseInt(document.getElementById('hoursCustomUnit').value)||1;
+    return n*unit;
+  }
+  return parseInt(sel)||0;
+}
 
 function switchSrc(src){
   discSrc=src;
@@ -531,7 +586,7 @@ function switchSrc(src){
 
 async function runDiscover(btn){
   const min_like=parseInt(document.getElementById('minLike').value)||0;
-  const hours=parseInt(document.getElementById('hours').value)||0;
+  const hours=getHours();
   discSel.clear();
   document.getElementById('discTools').style.display='none';
   const grid=document.getElementById('discGrid');
@@ -539,7 +594,7 @@ async function runDiscover(btn){
     let d;
     if(discSrc==='library'){
       const n=(curStatus?.bloggers||[]).length;
-      if(!n){ alert('你的库里还没有博主，先去「博主监控」加几个'); return; }
+      if(!n){ uiAlert('你的库里还没有博主，先去「博主监控」加几个'); return; }
       btn.disabled=true; btn.textContent='🔎 查找中…';
       grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…</div>`;
       d=await api('/api/library_search','POST',{hours});
@@ -547,7 +602,7 @@ async function runDiscover(btn){
       document.getElementById('discMeta').textContent=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，按点赞取前 ${d.count}`;
     }else{
       const seeds=document.getElementById('seedInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
-      if(!seeds.length){ alert('先粘贴至少一条种子视频链接'); return; }
+      if(!seeds.length){ uiAlert('先粘贴至少一条种子视频链接'); return; }
       const pages=parseInt(document.getElementById('pages').value);
       btn.disabled=true; btn.textContent='🔎 挖掘中…（约1分钟）';
       grid.innerHTML='<div class="empty"><div class="big">⏳</div>正在抓取相关推荐并筛选爆款…<br>相关推荐每页间隔30秒，请稍候</div>';
@@ -619,7 +674,7 @@ async function downloadDisc(btn){
     discItems.forEach(p=>{ if(ids.includes(p.aweme_id)) p.downloaded=true; });
     discSel.clear(); renderDisc();
     setTimeout(()=>{btn.innerHTML=old;updateDiscBar();},2200);
-  }catch(e){ alert(e.message); btn.innerHTML=old; btn.disabled=false; }
+  }catch(e){ uiAlert(e.message); btn.innerHTML=old; btn.disabled=false; }
 }
 
 /* ---- 更新动态：按博主分类 + 下钻明细 ---- */
@@ -707,11 +762,11 @@ async function addBlogger(){
   if(!inp.value.trim())return;
   btn.disabled=true;btn.textContent='解析中…';
   try{ await api('/api/bloggers','POST',{url:inp.value}); inp.value=''; await refresh(); }
-  catch(e){ alert(e.message); }
+  catch(e){ uiAlert(e.message); }
   btn.disabled=false;btn.textContent='➕ 添加监控';
 }
 async function delBlogger(id){
-  if(!confirm('确定移除这个博主？（不会删除已下载的文件）'))return;
+  if(!await uiConfirm('确定移除这个博主？（不会删除已下载的文件）','移除博主'))return;
   await api('/api/bloggers/'+id,'DELETE'); refresh();
 }
 /* ---- 播放器 ---- */
@@ -744,15 +799,15 @@ async function downloadUpdate(btn, sec, aid){
   try{
     const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:[aid]});
     if(d.success){ toast('已下载到本地'); refresh(); }
-    else{ alert('下载失败'); btn.disabled=false; btn.innerHTML=old; }
-  }catch(e){ alert(e.message); btn.disabled=false; btn.innerHTML=old; }
+    else{ uiAlert('下载失败'); btn.disabled=false; btn.innerHTML=old; }
+  }catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; }
 }
 
 /* ---- 导出/导入博主 ---- */
 async function exportBloggers(){
   try{
     const d=await api('/api/export_bloggers');
-    if(!d.bloggers.length){ alert('库里还没有博主，先添加几个再导出'); return; }
+    if(!d.bloggers.length){ uiAlert('库里还没有博主，先添加几个再导出'); return; }
     const blob=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
@@ -760,18 +815,18 @@ async function exportBloggers(){
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(a.href),3000);
     toast('已导出 '+d.bloggers.length+' 个博主');
-  }catch(e){ alert(e.message); }
+  }catch(e){ uiAlert(e.message); }
 }
 function importBloggers(){
   const inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
   inp.onchange=async()=>{
     const f=inp.files[0]; if(!f) return;
-    let data; try{ data=JSON.parse(await f.text()); }catch(e){ alert('文件解析失败，不是有效的 JSON'); return; }
+    let data; try{ data=JSON.parse(await f.text()); }catch(e){ uiAlert('文件解析失败，不是有效的 JSON'); return; }
     const bloggers=Array.isArray(data)?data:(data.bloggers||[]);
-    if(!bloggers.length){ alert('文件里没有博主数据'); return; }
+    if(!bloggers.length){ uiAlert('文件里没有博主数据'); return; }
     try{ const r=await api('/api/import_bloggers','POST',{bloggers});
       toast(`导入成功：新增 ${r.added} 个（现共 ${r.total} 个）`); refresh(); }
-    catch(e){ alert(e.message); }
+    catch(e){ uiAlert(e.message); }
   };
   inp.click();
 }
@@ -783,13 +838,13 @@ async function checkUpdate(manual){
     document.getElementById('appVer').textContent='v'+d.current;
     if(d.has_update){
       document.getElementById('updDot').style.display='inline';
-      if(manual && confirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n去下载页面？`)){
+      if(manual && await uiConfirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n去下载页面？`,'有新版本')){
         if(d.url) window.open(d.url,'_blank');
       }
     }else if(manual){
       toast(d.note?('当前已是最新（'+d.note+'）'):'已是最新版本 v'+d.current);
     }
-  }catch(e){ if(manual) alert('检查更新失败：'+e.message); }
+  }catch(e){ if(manual) uiAlert('检查更新失败：'+e.message); }
 }
 
 /* ---- 抖音登录 ---- */
@@ -798,25 +853,25 @@ async function loginQR(btn){
     const old=btn.textContent; btn.disabled=true; btn.textContent='请在弹出窗口里扫码…';
     try{ const r=await window.pywebview.api.login_qr();
       if(r&&r.ok){ toast('登录成功！现在可以拉更多作品了'); refresh(); }
-      else alert(r&&r.error||'登录未完成'); }
-    catch(e){ alert('登录失败：'+e); }
+      else uiAlert(r&&r.error||'登录未完成'); }
+    catch(e){ uiAlert('登录失败：'+e); }
     btn.disabled=false; btn.textContent=old;
-  }else{ alert('扫码登录需在桌面软件里用。或改用「粘贴 Cookie」/「从浏览器导入」。'); }
+  }else{ uiAlert('扫码登录需在桌面软件里用。或改用「粘贴 Cookie」/「从浏览器导入」。'); }
 }
 async function loginBrowser(btn){
   const old=btn.textContent; btn.disabled=true; btn.textContent='读取中…';
   try{ const r=await api('/api/login_browser','POST'); if(r.ok){ toast('已从'+(r.source||'浏览器')+'导入登录'); refresh(); } }
-  catch(e){ alert(e.message); }
+  catch(e){ uiAlert(e.message); }
   btn.disabled=false; btn.textContent=old;
 }
 async function pasteCookie(){
-  const c=prompt('把在浏览器登录 douyin.com 后复制的 Cookie 整段粘进来（需包含 sessionid）：');
+  const c=await uiPrompt('把在浏览器登录 douyin.com 后复制的 Cookie 整段粘进来（需包含 sessionid）：',{title:'粘贴 Cookie 登录',placeholder:'sessionid=xxx; ...'});
   if(!c) return;
   try{ await api('/api/set_cookie','POST',{cookie:c}); toast('登录成功！'); refresh(); }
-  catch(e){ alert(e.message); }
+  catch(e){ uiAlert(e.message); }
 }
 async function logout(){
-  if(!confirm('退出登录？退出后每个博主又只能看最新约20条。')) return;
+  if(!await uiConfirm('退出登录？退出后每个博主又只能看最新约20条。','退出登录')) return;
   await api('/api/logout','POST'); toast('已退出登录'); refresh();
 }
 
@@ -824,16 +879,12 @@ async function chooseDir(btn){
   const old=btn.textContent; btn.disabled=true; btn.textContent='选择中…';
   try{
     const d=await api('/api/choose_dir','POST');
-    if(d.ok){ document.getElementById('dlDirInput').value=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
-  }catch(e){ alert(e.message+'\n\n可直接在左边输入框粘贴路径后点「保存路径」'); }
-  btn.disabled=false; btn.textContent=old;
-}
-async function saveDir(btn){
-  const path=document.getElementById('dlDirInput').value.trim();
-  if(!path){ alert('先填写一个文件夹路径'); return; }
-  const old=btn.textContent; btn.disabled=true; btn.textContent='保存中…';
-  try{ const d=await api('/api/set_dir','POST',{path}); toast('已设置下载位置：'+d.download_dir); refresh(); }
-  catch(e){ alert(e.message); }
+    if(d.ok){ document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
+  }catch(e){
+    // 弹不出原生对话框时，用风格化输入框兜底
+    const p=await uiPrompt('选择文件夹失败，可直接粘贴一个文件夹路径：',{title:'下载保存位置',placeholder:'例如 D:\\抖音下载'});
+    if(p){ try{ const d=await api('/api/set_dir','POST',{path:p}); document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }catch(err){ uiAlert(err.message); } }
+  }
   btn.disabled=false; btn.textContent=old;
 }
 function toast(msg){
