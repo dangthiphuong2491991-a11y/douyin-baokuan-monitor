@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 """桌面软件入口：后台跑 FastAPI，前台开原生窗口（造梦工坊风格 UI）"""
+import base64
+import glob
+import os
+import subprocess
+import sys
 import threading
 import time
 import socket
@@ -9,6 +14,46 @@ import webview
 
 import app as appmod
 from app import app, PORT
+
+_DETACHED = 0x00000008
+_NO_WINDOW = 0x08000000
+
+
+def _cleanup_leftovers():
+    """启动时清理自动更新残留：*_old.exe / *_new.exe / *.part"""
+    if not getattr(sys, "frozen", False):
+        return
+    folder = os.path.dirname(sys.executable)
+    for pat in ("*_old.exe", "*_new.exe", "*.part"):
+        for f in glob.glob(os.path.join(folder, pat)):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+
+def _ensure_desktop_shortcut():
+    """确保桌面有个「爆款监控」快捷方式指向当前 exe（每次启动刷新，更新后依然可用）"""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        exe = sys.executable
+        workdir = os.path.dirname(exe)
+        ps = (
+            "$W=New-Object -ComObject WScript.Shell\n"
+            "$p=[System.IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'爆款监控.lnk')\n"
+            "$s=$W.CreateShortcut($p)\n"
+            f'$s.TargetPath="{exe}"\n'
+            f'$s.WorkingDirectory="{workdir}"\n'
+            "$s.Save()\n"
+        )
+        enc = base64.b64encode(ps.encode("utf-16-le")).decode()
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-EncodedCommand", enc],
+            creationflags=_DETACHED | _NO_WINDOW)
+    except Exception:
+        pass
 
 
 def _port_ready(host="127.0.0.1", port=PORT, timeout=15):
@@ -92,6 +137,8 @@ class JsApi:
 
 
 if __name__ == "__main__":
+    _cleanup_leftovers()          # 清掉上次更新残留的旧包
+    _ensure_desktop_shortcut()    # 保证桌面快捷方式存在且指向当前 exe
     threading.Thread(target=_serve, daemon=True).start()
     _port_ready()
     jsapi = JsApi()
