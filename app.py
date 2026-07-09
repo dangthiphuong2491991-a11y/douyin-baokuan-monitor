@@ -1123,27 +1123,27 @@ async def api_do_update():
             newf.unlink(missing_ok=True)
             return JSONResponse({"error": "下载的文件异常（过小）"}, status_code=400)
 
-        # 生成更新批处理：等本进程退出→覆盖→重启→自删
+        # 用 PowerShell 做更新器（原生支持中文/Unicode 路径，cmd 批处理不可靠）
         pid = os.getpid()
-        bat = cur.with_name("_update.bat")
-        bat_text = (
-            "@echo off\r\n"
-            "chcp 936 >nul\r\n"
-            ":wait\r\n"
-            f'tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul\r\n'
-            "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
-            ":mv\r\n"
-            f'move /y "{newf}" "{cur}" >nul 2>&1\r\n'
-            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto mv)\r\n"
-            f'start "" "{cur}"\r\n'
-            'del "%~f0"\r\n'
+        ps1 = cur.with_name("_update.ps1")
+        ps_text = (
+            "$ErrorActionPreference='SilentlyContinue'\r\n"
+            f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 400 }}\r\n"
+            "for ($i=0; $i -lt 40; $i++) {\r\n"
+            f'  try {{ Move-Item -Force -LiteralPath "{newf}" -Destination "{cur}" -ErrorAction Stop; break }}\r\n'
+            "  catch { Start-Sleep -Milliseconds 500 }\r\n"
+            "}\r\n"
+            f'Start-Process -FilePath "{cur}"\r\n'
+            "Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path\r\n"
         )
-        bat.write_bytes(bat_text.encode("gbk", errors="ignore"))
+        ps1.write_text(ps_text, encoding="utf-8-sig")   # BOM：确保 PowerShell 正确读中文路径
         DETACHED = 0x00000008
         NO_WINDOW = 0x08000000
-        subprocess.Popen(["cmd", "/c", str(bat)], creationflags=DETACHED | NO_WINDOW,
-                         cwd=str(cur.parent))
-        # 1 秒后退出，让批处理接管
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-File", str(ps1)],
+            creationflags=DETACHED | NO_WINDOW, cwd=str(cur.parent))
+        # 1 秒后退出，让更新器接管
         threading.Timer(1.0, lambda: os._exit(0)).start()
         return {"ok": True, "version": info.get("version")}
     except Exception as e:
