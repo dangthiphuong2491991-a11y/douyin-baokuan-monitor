@@ -431,7 +431,8 @@ function render(st){
   document.getElementById('stBloggers').textContent = st.bloggers.filter(b=>b.notify!==false).length;
   document.getElementById('stUpdates').textContent = st.updates.length;
   const lc=document.getElementById('libCount'); if(lc) lc.textContent=st.bloggers.length;
-  const dt=document.getElementById('dlDirText'); if(dt) dt.textContent=st.download_dir||'—';
+  const dt=document.getElementById('dlDirText');
+  if(dt){ dt.textContent=st.download_dir||'未选择（请点右侧「选择文件夹」）'; dt.style.color=st.download_dir?'var(--txt)':'var(--warn)'; }
   const lb=document.getElementById('loginBadge'), lo=document.getElementById('logoutBtn');
   if(lb){ lb.textContent=st.logged_in?'已登录':'未登录'; lb.className='tag '+(st.logged_in?'ok':''); if(lo) lo.style.display=st.logged_in?'inline-block':'none'; }
 
@@ -549,6 +550,7 @@ function selectAll(){
 
 async function downloadSelected(btn){
   if(!selectedIds.size) return;
+  if(!await ensureDownloadDir()) return;
   const ids=[...selectedIds], old=btn.innerHTML;
   btn.disabled=true; btn.textContent=`下载中 ${ids.length} 个…`;
   try{
@@ -665,6 +667,7 @@ function selectAllDisc(){
 }
 async function downloadDisc(btn){
   if(!discSel.size) return;
+  if(!await ensureDownloadDir()) return;
   const ids=[...discSel], old=btn.innerHTML;
   btn.disabled=true; btn.textContent=`下载中 ${ids.length} 个…`;
   try{
@@ -810,12 +813,24 @@ function closePlayer(){
 document.addEventListener('keydown',e=>{ if(e.key==='Escape')closePlayer(); });
 
 async function downloadUpdate(btn, sec, aid){
+  if(!await ensureDownloadDir()) return;
   const old=btn.innerHTML; btn.disabled=true; btn.textContent='下载中…';
   try{
     const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:[aid]});
     if(d.success){ toast('已下载到本地'); refresh(); }
     else{ uiAlert('下载失败'); btn.disabled=false; btn.innerHTML=old; }
   }catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; }
+}
+
+/* ---- 下载前确保已选保存位置 ---- */
+async function ensureDownloadDir(){
+  if(curStatus && curStatus.dir_chosen) return true;
+  const go=await uiConfirm('还没设置下载保存位置。现在去选择一个文件夹？','请先选择下载位置');
+  if(go){
+    document.querySelector('.nav a[data-page="set"]').click();
+    setTimeout(()=>{ const b=document.querySelector('#page-set button[onclick^="chooseDir"]'); if(b) chooseDir(b); },300);
+  }
+  return false;
 }
 
 /* ---- 导出/导入博主 ---- */

@@ -63,7 +63,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -492,7 +492,8 @@ def api_status():
         "updates": updates,
         "last_check": state.get("last_check"),
         "errors": state.get("errors", [])[:5],
-        "download_dir": str(get_dl()),
+        "download_dir": config.get("download_dir") or "",
+        "dir_chosen": bool(config.get("download_dir")),
         "logged_in": is_logged_in(),
         "version": VERSION,
     }
