@@ -1,5 +1,6 @@
 {
-  "version": "1.0.2",
-  "notes": "新增：下载视频时若属于合集，可一键下载整个合集（全部集）；播放器里也有「下载整个合集」按钮。抓取提速（关闭无用的通知重试）。",
-  "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
+  "version": "1.0.3",
+  "notes": "支持自动更新：打开软件检测到新版会自动下载并覆盖重启，无需手动去下载页。还有：下载整个合集、抓取提速。",
+  "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.3/BaokuanMonitor-v1.0.3.exe"
 }

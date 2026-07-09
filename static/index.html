@@ -895,14 +895,39 @@ async function checkUpdate(manual){
     document.getElementById('appVer').textContent='v'+d.current;
     if(d.has_update){
       document.getElementById('updDot').style.display='inline';
-      if(manual && await uiConfirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n去下载页面？`,'有新版本')){
-        if(d.url) window.open(d.url,'_blank');
+      const ok=await uiConfirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n现在自动更新？会下载新版并自动重启软件。`,'有新版本');
+      if(ok){
+        if(d.can_auto) doUpdate(d);
+        else if(d.url){ window.open(d.url,'_blank'); }   // 源码模式没法自覆盖，退回下载页
       }
     }else if(manual){
       toast(d.note?('当前已是最新（'+d.note+'）'):'已是最新版本 v'+d.current);
     }
   }catch(e){ if(manual) uiAlert('检查更新失败：'+e.message); }
 }
+async function doUpdate(d){
+  showUpdateMask('正在下载新版本 v'+d.latest+' …\n下载完成后会自动覆盖并重启，请勿关闭软件');
+  try{
+    const r=await api('/api/do_update','POST');
+    if(r&&r.ok){ showUpdateMask('下载完成，正在覆盖并重启软件…\n本窗口会自动关闭'); }
+    else{ hideUpdateMask(); uiAlert((r&&r.error)||'更新失败'); }
+  }catch(e){
+    // 更新成功后后端会退出，导致请求中断 → 视为正在重启
+    showUpdateMask('正在覆盖并重启软件…\n本窗口会自动关闭');
+  }
+}
+function showUpdateMask(text){
+  let m=document.getElementById('updMask');
+  if(!m){
+    m=document.createElement('div'); m.id='updMask';
+    m.style.cssText='position:fixed;inset:0;background:rgba(10,12,18,.93);backdrop-filter:blur(5px);z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:#fff;text-align:center;white-space:pre-line;font-size:15px;line-height:1.9';
+    m.innerHTML='<div style="width:46px;height:46px;border:4px solid #6c5ce7;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div><div id="updMaskText"></div>';
+    document.body.appendChild(m);
+    const s=document.createElement('style'); s.textContent='@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s);
+  }
+  m.style.display='flex'; document.getElementById('updMaskText').textContent=text;
+}
+function hideUpdateMask(){ const m=document.getElementById('updMask'); if(m) m.style.display='none'; }
 
 /* ---- 抖音登录 ---- */
 async function loginQR(btn){

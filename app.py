@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -71,7 +72,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -1078,7 +1079,9 @@ async def api_check_update():
         latest = str(info.get("version", VERSION))
         has = _ver_tuple(latest) > _ver_tuple(VERSION)
         return {"current": VERSION, "latest": latest, "has_update": has,
-                "notes": info.get("notes", ""), "url": info.get("url") or RELEASE_PAGE}
+                "notes": info.get("notes", ""), "url": info.get("url") or RELEASE_PAGE,
+                "exe_url": info.get("exe_url", ""),
+                "can_auto": bool(getattr(sys, "frozen", False))}
     except Exception as e:
         return {"current": VERSION, "latest": VERSION, "has_update": False, "error": str(e)[:80]}
 
@@ -1088,6 +1091,63 @@ def _ver_tuple(v: str):
         return tuple(int(x) for x in str(v).strip().lstrip("vV").split("."))
     except Exception:
         return (0,)
+
+
+@app.post("/api/do_update")
+async def api_do_update():
+    """自动更新：下载新版 exe → 生成批处理，等本进程退出后覆盖原文件并重启"""
+    if not getattr(sys, "frozen", False):
+        return JSONResponse({"error": "源码运行不支持自动覆盖更新（开发时请用 git pull）"}, status_code=400)
+    if not UPDATE_RAW_URL:
+        return JSONResponse({"error": "未配置更新源"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            info = (await c.get(UPDATE_RAW_URL)).json()
+        exe_url = info.get("exe_url")
+        if not exe_url:
+            return JSONResponse({"error": "更新信息里没有 exe 下载地址"}, status_code=400)
+
+        cur = Path(sys.executable)
+        newf = cur.with_name(cur.stem + "_new.exe")
+        # 下载新 exe
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as c:
+            async with c.stream("GET", exe_url) as r:
+                if r.status_code != 200:
+                    return JSONResponse({"error": f"下载新版失败 HTTP {r.status_code}"}, status_code=400)
+                tmp = newf.with_suffix(".part")
+                with open(tmp, "wb") as f:
+                    async for chunk in r.aiter_bytes(1 << 16):
+                        f.write(chunk)
+                tmp.replace(newf)
+        if newf.stat().st_size < 1_000_000:
+            newf.unlink(missing_ok=True)
+            return JSONResponse({"error": "下载的文件异常（过小）"}, status_code=400)
+
+        # 生成更新批处理：等本进程退出→覆盖→重启→自删
+        pid = os.getpid()
+        bat = cur.with_name("_update.bat")
+        bat_text = (
+            "@echo off\r\n"
+            "chcp 936 >nul\r\n"
+            ":wait\r\n"
+            f'tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul\r\n'
+            "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
+            ":mv\r\n"
+            f'move /y "{newf}" "{cur}" >nul 2>&1\r\n'
+            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto mv)\r\n"
+            f'start "" "{cur}"\r\n'
+            'del "%~f0"\r\n'
+        )
+        bat.write_bytes(bat_text.encode("gbk", errors="ignore"))
+        DETACHED = 0x00000008
+        NO_WINDOW = 0x08000000
+        subprocess.Popen(["cmd", "/c", str(bat)], creationflags=DETACHED | NO_WINDOW,
+                         cwd=str(cur.parent))
+        # 1 秒后退出，让批处理接管
+        threading.Timer(1.0, lambda: os._exit(0)).start()
+        return {"ok": True, "version": info.get("version")}
+    except Exception as e:
+        return JSONResponse({"error": f"更新失败: {e}"}, status_code=400)
 
 
 @app.post("/api/test_notify")
