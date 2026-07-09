@@ -1191,12 +1191,11 @@ async def api_do_update():
                 {"error": f"新版就位失败（{e}）。已回滚，请手动替换。（已打开文件夹）"},
                 status_code=400)
 
-        # 启动新版 + 退出
-        pid = os.getpid()
+        # 启动新版 + 退出。不再靠"等 PID 退出"（冻结 exe 的 PID 判断不可靠会卡死），
+        # 直接固定等 3 秒让本进程退出、释放端口，再启动新 exe。
         ps_script = (
             "$ErrorActionPreference='SilentlyContinue'\n"
-            f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 400 }}\n"
-            "Start-Sleep -Milliseconds 800\n"
+            "Start-Sleep -Seconds 3\n"
             f'Start-Process -FilePath "{cur}"\n'
         )
         enc = base64.b64encode(ps_script.encode("utf-16-le")).decode()
