@@ -22,7 +22,26 @@ def _port_ready(host="127.0.0.1", port=PORT, timeout=15):
     return False
 
 
+def _wait_port_free(host="127.0.0.1", port=PORT, timeout=25):
+    """启动时等端口释放——自动更新重启时，旧进程可能还占着端口"""
+    end = time.time() + timeout
+    while time.time() < end:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind((host, port))
+            s.close()
+            return True
+        except OSError:
+            try:
+                s.close()
+            except Exception:
+                pass
+            time.sleep(0.4)
+    return False
+
+
 def _serve():
+    _wait_port_free()
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 
 

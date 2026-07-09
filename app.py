@@ -1191,22 +1191,18 @@ async def api_do_update():
                 {"error": f"新版就位失败（{e}）。已回滚，请手动替换。（已打开文件夹）"},
                 status_code=400)
 
-        # 启动新版 + 退出。不再靠"等 PID 退出"（冻结 exe 的 PID 判断不可靠会卡死），
-        # 直接固定等 3 秒让本进程退出、释放端口，再启动新 exe。
-        ps_script = (
-            "$ErrorActionPreference='SilentlyContinue'\n"
-            "Start-Sleep -Seconds 3\n"
-            f'Start-Process -FilePath "{cur}"\n'
-        )
-        enc = base64.b64encode(ps_script.encode("utf-16-le")).decode()
+        # 直接启动新 exe（不经 PowerShell 中转——从冻结 exe spawn PowerShell 不可靠）。
+        # 新 exe 启动时会等旧进程退出、端口释放（见 desktop.py 的 _wait_port_free）。
         DETACHED = 0x00000008
-        NO_WINDOW = 0x08000000
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-WindowStyle", "Hidden", "-EncodedCommand", enc],
-            creationflags=DETACHED | NO_WINDOW, cwd=str(cur.parent))
-        _ulog("已启动重启器，1 秒后退出本进程。==== do_update 成功收尾 ====")
-        threading.Timer(1.0, lambda: os._exit(0)).start()
+        NEW_GROUP = 0x00000200
+        try:
+            subprocess.Popen([str(cur)], creationflags=DETACHED | NEW_GROUP,
+                             cwd=str(cur.parent), close_fds=True)
+            _ulog("已直接启动新 exe")
+        except Exception as e:
+            _ulog(f"启动新 exe 失败：{e}")
+        _ulog("==== do_update 成功收尾，1.5 秒后退出本进程 ====")
+        threading.Timer(1.5, lambda: os._exit(0)).start()
         return {"ok": True, "version": info.get("version")}
     except Exception as e:
         _ulog(f"do_update 异常：{e}")
