@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
-  "notes": "支持自动更新：打开软件检测到新版会自动下载并覆盖重启，无需手动去下载页。还有：下载整个合集、抓取提速。",
+  "version": "1.0.4",
+  "notes": "自动更新修复：改用 PowerShell 编码命令覆盖，兼容中文路径。以及下载整个合集、抓取提速。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.3/BaokuanMonitor-v1.0.3.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.4/BaokuanMonitor-v1.0.4.exe"
 }
