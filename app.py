@@ -2,6 +2,7 @@
 """抖音博主更新监控 — 定时检查博主新作品，弹窗提醒 + 自动下载无水印视频 + 本地面板"""
 import asyncio
 import json
+import base64
 import os
 import re
 import subprocess
@@ -1123,25 +1124,24 @@ async def api_do_update():
             newf.unlink(missing_ok=True)
             return JSONResponse({"error": "下载的文件异常（过小）"}, status_code=400)
 
-        # 用 PowerShell 做更新器（原生支持中文/Unicode 路径，cmd 批处理不可靠）
+        # 用 PowerShell -EncodedCommand 做更新器：等本进程退出→覆盖→重启。
+        # 关键：走 base64 内联（-File 加载中文路径脚本会失败），中文路径当字符串写在脚本里没问题。
         pid = os.getpid()
-        ps1 = cur.with_name("_update.ps1")
-        ps_text = (
-            "$ErrorActionPreference='SilentlyContinue'\r\n"
-            f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 400 }}\r\n"
-            "for ($i=0; $i -lt 40; $i++) {\r\n"
-            f'  try {{ Move-Item -Force -LiteralPath "{newf}" -Destination "{cur}" -ErrorAction Stop; break }}\r\n'
-            "  catch { Start-Sleep -Milliseconds 500 }\r\n"
-            "}\r\n"
-            f'Start-Process -FilePath "{cur}"\r\n'
-            "Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path\r\n"
+        ps_script = (
+            "$ErrorActionPreference='SilentlyContinue'\n"
+            f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 400 }}\n"
+            "for ($j=0; $j -lt 120; $j++) {\n"   # 最多重试 2 分钟，扛过 Defender 对新 exe 的扫描锁
+            f'  try {{ Move-Item -Force -LiteralPath "{newf}" -Destination "{cur}" -ErrorAction Stop; break }}\n'
+            "  catch { Start-Sleep -Milliseconds 1000 }\n"
+            "}\n"
+            f'Start-Process -FilePath "{cur}"\n'
         )
-        ps1.write_text(ps_text, encoding="utf-8-sig")   # BOM：确保 PowerShell 正确读中文路径
+        enc = base64.b64encode(ps_script.encode("utf-16-le")).decode()
         DETACHED = 0x00000008
         NO_WINDOW = 0x08000000
         subprocess.Popen(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-WindowStyle", "Hidden", "-File", str(ps1)],
+             "-WindowStyle", "Hidden", "-EncodedCommand", enc],
             creationflags=DETACHED | NO_WINDOW, cwd=str(cur.parent))
         # 1 秒后退出，让更新器接管
         threading.Timer(1.0, lambda: os._exit(0)).start()
