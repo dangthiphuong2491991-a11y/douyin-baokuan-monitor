@@ -17,6 +17,8 @@ for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3'):
         pass
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += ['jsonpath_ng', 'm3u8', 'pyexecjs', 'execjs', 'gmssl']
+# 建桌面快捷方式用（pywin32）
+hiddenimports += ['pythoncom', 'pywintypes', 'win32com', 'win32com.client', 'win32api']
 
 a = Analysis(
     ['desktop.py'],

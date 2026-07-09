@@ -33,25 +33,20 @@ def _cleanup_leftovers():
 
 
 def _ensure_desktop_shortcut():
-    """确保桌面有个「爆款监控」快捷方式指向当前 exe（每次启动刷新，更新后依然可用）"""
+    """确保桌面有个「爆款监控」快捷方式指向当前 exe（进程内直接建，比 subprocess 可靠）"""
     if not getattr(sys, "frozen", False):
         return
     try:
-        exe = sys.executable
-        workdir = os.path.dirname(exe)
-        ps = (
-            "$W=New-Object -ComObject WScript.Shell\n"
-            "$p=[System.IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'爆款监控.lnk')\n"
-            "$s=$W.CreateShortcut($p)\n"
-            f'$s.TargetPath="{exe}"\n'
-            f'$s.WorkingDirectory="{workdir}"\n'
-            "$s.Save()\n"
-        )
-        enc = base64.b64encode(ps.encode("utf-16-le")).decode()
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-WindowStyle", "Hidden", "-EncodedCommand", enc],
-            creationflags=_DETACHED | _NO_WINDOW)
+        import pythoncom
+        from win32com.client import Dispatch
+        pythoncom.CoInitialize()
+        shell = Dispatch("WScript.Shell")
+        desktop = shell.SpecialFolders("Desktop")   # 兼容 OneDrive 重定向的桌面
+        sc = shell.CreateShortCut(os.path.join(desktop, "爆款监控.lnk"))
+        sc.Targetpath = sys.executable
+        sc.WorkingDirectory = os.path.dirname(sys.executable)
+        sc.IconLocation = sys.executable
+        sc.save()
     except Exception:
         pass
 
