@@ -789,18 +789,28 @@ async def _download_mix_bg(mix_id, mix_name, nickname, total_hint):
         log_err(f"抓合集失败: {e}")
     if episodes:
         MIX_PROGRESS[mix_id]["total"] = len(episodes)
+    failed = 0
     for ep in episodes:
-        try:
-            aw = ep if _has_media(ep) else None
-            if aw is None:
-                v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=str(ep.get("aweme_id")))
-                aw = (v._to_raw() or {}).get("aweme_detail")
-            if aw:
-                await download_aweme_media(nickname, aw)
-        except Exception as e:
-            log_err(f"合集下载一集失败: {e}")
+        aid = str(ep.get("aweme_id"))
+        ok = False
+        for attempt in range(2):   # 失败重试一次（限流常是偶发）
+            try:
+                aw = ep if _has_media(ep) else None
+                if aw is None:
+                    v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=aid)
+                    aw = (v._to_raw() or {}).get("aweme_detail")
+                if aw:
+                    ok, _ = await download_aweme_media(nickname, aw)
+                if ok:
+                    break
+            except Exception as e:
+                log_err(f"合集下载一集失败: {e}")
+            await asyncio.sleep(2)   # 重试前稍等
+        if not ok:
+            failed += 1
         MIX_PROGRESS[mix_id]["done"] += 1
-    print(f"[MIX] 合集《{mix_name}》完成 {MIX_PROGRESS[mix_id]['done']}/{len(episodes)}", flush=True)
+        await asyncio.sleep(1.2)    # 每集之间温和停一下，防限流/封号
+    print(f"[MIX] 合集《{mix_name}》完成 {MIX_PROGRESS[mix_id]['done']}/{len(episodes)}，失败 {failed}", flush=True)
     await asyncio.sleep(10)
     MIX_PROGRESS.pop(mix_id, None)
 
