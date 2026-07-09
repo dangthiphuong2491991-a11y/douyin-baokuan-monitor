@@ -111,6 +111,13 @@
   .setrow .l .t{font-weight:600}
   .setrow .l .d{color:var(--sub);font-size:12.5px;margin-top:2px}
 
+  /* 开关 switch */
+  .switch{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0}
+  .switch input{opacity:0;width:0;height:0}
+  .switch .slider{position:absolute;inset:0;background:#3a4055;border-radius:22px;transition:.2s;cursor:pointer}
+  .switch .slider:before{content:"";position:absolute;height:16px;width:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--acc)}
+  .switch input:checked + .slider:before{transform:translateX(18px)}
   /* 来源切换 tab */
   .tab{background:var(--card2);border:1px solid var(--line);color:var(--sub);padding:9px 16px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600}
   .tab:hover{color:var(--txt)}
@@ -421,7 +428,7 @@ function render(st){
   document.getElementById('lastCheck').textContent = st.last_check || '启动中…';
   document.getElementById('curInterval').textContent = st.interval_minutes;
   document.getElementById('intervalSel').value = String(st.interval_minutes);
-  document.getElementById('stBloggers').textContent = st.bloggers.length;
+  document.getElementById('stBloggers').textContent = st.bloggers.filter(b=>b.notify!==false).length;
   document.getElementById('stUpdates').textContent = st.updates.length;
   const lc=document.getElementById('libCount'); if(lc) lc.textContent=st.bloggers.length;
   const dt=document.getElementById('dlDirText'); if(dt) dt.textContent=st.download_dir||'—';
@@ -438,6 +445,10 @@ function render(st){
       <div class="info">
         <div class="nm">${esc(b.nickname)}</div>
         <div class="sb">粉丝 ${b.follower_count??'—'} · 作品 ${b.aweme_count??'—'} · 查看作品 →</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0" title="开启后才检查更新、进更新动态" onclick="event.stopPropagation()">
+        <label class="switch"><input type="checkbox" ${b.notify!==false?'checked':''} onchange="toggleNotify('${b.sec_user_id}',this.checked,this)"><span class="slider"></span></label>
+        <span style="font-size:11px;color:${b.notify!==false?'var(--acc2)':'var(--dim)'}">更新提醒</span>
       </div>
       <button class="x" title="移除" onclick="event.stopPropagation();delBlogger('${b.sec_user_id}')">✕</button>
     </div>`).join('') : emptyBox('👀','还没有添加博主','在上方粘贴博主主页链接开始监控');
@@ -764,6 +775,10 @@ async function addBlogger(){
   try{ await api('/api/bloggers','POST',{url:inp.value}); inp.value=''; await refresh(); }
   catch(e){ uiAlert(e.message); }
   btn.disabled=false;btn.textContent='➕ 添加监控';
+}
+async function toggleNotify(sec, on, el){
+  try{ await api('/api/blogger_notify','POST',{sec_user_id:sec,notify:on}); toast(on?'已开启更新提醒':'已关闭更新提醒'); refresh(); }
+  catch(e){ uiAlert(e.message); if(el) el.checked=!on; }
 }
 async function delBlogger(id){
   if(!await uiConfirm('确定移除这个博主？（不会删除已下载的文件）','移除博主'))return;

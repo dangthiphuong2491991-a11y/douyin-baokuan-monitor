@@ -388,6 +388,8 @@ async def monitor_loop():
     await asyncio.sleep(3)
     while True:
         for b in list(config["bloggers"]):
+            if not b.get("notify", True):   # 未开启"更新动态提醒"的博主不检查
+                continue
             try:
                 n = await check_blogger(b)
                 if n:
@@ -554,7 +556,8 @@ async def api_add_blogger(body: AddBody):
     except Exception as e:
         prof = {"nickname": sec_uid[:16], "avatar": "", "follower_count": "", "aweme_count": "", "signature": ""}
         log_err(f"获取博主资料失败(不影响监控): {e}")
-    blogger = {"sec_user_id": sec_uid, "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"), **prof}
+    blogger = {"sec_user_id": sec_uid, "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+               "notify": True, **prof}
     config["bloggers"].append(blogger)
     _save(CONFIG_FILE, config)
     try:
@@ -569,6 +572,32 @@ def api_del_blogger(sec_uid: str):
     config["bloggers"] = [b for b in config["bloggers"] if b["sec_user_id"] != sec_uid]
     _save(CONFIG_FILE, config)
     return {"ok": True}
+
+
+class NotifyBody(BaseModel):
+    sec_user_id: str
+    notify: bool
+
+
+@app.post("/api/blogger_notify")
+async def api_blogger_notify(body: NotifyBody):
+    """开/关某博主的更新动态提醒。首次开启时先建基线（避免把历史作品当新的刷屏）"""
+    hit = None
+    for b in config["bloggers"]:
+        if b["sec_user_id"] == body.sec_user_id:
+            b["notify"] = body.notify
+            hit = b
+            break
+    if not hit:
+        return JSONResponse({"error": "博主不在库里"}, status_code=404)
+    # 开启且还没建过基线 → 建基线
+    if body.notify and not state["seen"].get(body.sec_user_id):
+        try:
+            await check_blogger(hit, baseline=True)
+        except Exception as e:
+            log_err(f"开启提醒建基线失败: {e}")
+    _save(CONFIG_FILE, config)
+    return {"ok": True, "notify": body.notify}
 
 
 class IntervalBody(BaseModel):
