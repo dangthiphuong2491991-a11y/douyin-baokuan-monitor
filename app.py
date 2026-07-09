@@ -73,7 +73,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -1094,9 +1094,20 @@ def _ver_tuple(v: str):
         return (0,)
 
 
+def _ulog(msg: str):
+    """更新流程日志，写到 exe 旁边的 update.log，方便排查"""
+    try:
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else BASE
+        with open(base / "update.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
+    except Exception:
+        pass
+
+
 @app.post("/api/do_update")
 async def api_do_update():
-    """自动更新：下载新版 exe → 生成批处理，等本进程退出后覆盖原文件并重启"""
+    """自动更新：下载新版 exe → 重命名运行中的自己 → 新版就位 → 重启。全程写 update.log。"""
+    _ulog("==== do_update 开始 ====")
     if not getattr(sys, "frozen", False):
         return JSONResponse({"error": "源码运行不支持自动覆盖更新（开发时请用 git pull）"}, status_code=400)
     if not UPDATE_RAW_URL:
@@ -1105,35 +1116,87 @@ async def api_do_update():
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             info = (await c.get(UPDATE_RAW_URL)).json()
         exe_url = info.get("exe_url")
+        _ulog(f"目标版本 {info.get('version')}  exe_url={exe_url}")
         if not exe_url:
             return JSONResponse({"error": "更新信息里没有 exe 下载地址"}, status_code=400)
 
         cur = Path(sys.executable)
         newf = cur.with_name(cur.stem + "_new.exe")
+        _ulog(f"当前 exe = {cur}")
         # 下载新 exe
+        _ulog("开始下载…")
         async with httpx.AsyncClient(timeout=None, follow_redirects=True) as c:
             async with c.stream("GET", exe_url) as r:
                 if r.status_code != 200:
+                    _ulog(f"下载失败 HTTP {r.status_code}")
                     return JSONResponse({"error": f"下载新版失败 HTTP {r.status_code}"}, status_code=400)
                 tmp = newf.with_suffix(".part")
                 with open(tmp, "wb") as f:
                     async for chunk in r.aiter_bytes(1 << 16):
                         f.write(chunk)
                 tmp.replace(newf)
-        if newf.stat().st_size < 1_000_000:
+        size = newf.stat().st_size
+        _ulog(f"下载完成，大小 {size} 字节")
+        if size < 1_000_000:
             newf.unlink(missing_ok=True)
-            return JSONResponse({"error": "下载的文件异常（过小）"}, status_code=400)
+            return JSONResponse({"error": "下载的文件异常（过小），可能网络中断了"}, status_code=400)
 
-        # 用 PowerShell -EncodedCommand 做更新器：等本进程退出→覆盖→重启。
-        # 关键：走 base64 内联（-File 加载中文路径脚本会失败），中文路径当字符串写在脚本里没问题。
+        # 等新 exe 可读（杀毒扫描完、释放锁）
+        readable = False
+        for i in range(60):
+            try:
+                with open(newf, "rb") as _f:
+                    _f.read(1)
+                readable = True
+                _ulog(f"新 exe 可读（第 {i} 次尝试）")
+                break
+            except Exception as e:
+                if i == 0:
+                    _ulog(f"新 exe 暂不可读，等待…（{e}）")
+                await asyncio.sleep(1)
+        if not readable:
+            _ulog("新 exe 60 秒内一直不可读 → 判定被锁")
+            os.startfile(str(cur.parent))
+            return JSONResponse(
+                {"error": f"新版已下载好，但一直读不了（可能被杀毒锁住）。\n请手动：关闭软件 → 把「{newf.name}」改名成「{cur.name}」。\n（已打开文件夹）"},
+                status_code=400)
+
+        # 重命名运行中的自己 → _old.exe，再把新版就位
+        oldf = cur.with_name(cur.stem + "_old.exe")
+        try:
+            if oldf.exists():
+                oldf.unlink()
+        except Exception as e:
+            _ulog(f"删旧的 _old.exe 失败（忽略）：{e}")
+        try:
+            os.replace(str(cur), str(oldf))
+            _ulog("步骤1 OK：已把运行中的 exe 改名为 _old.exe")
+        except Exception as e:
+            _ulog(f"步骤1 失败：重命名当前 exe 出错：{e}")
+            os.startfile(str(cur.parent))
+            return JSONResponse(
+                {"error": f"重命名当前程序失败（{e}）。新版已下载，请手动替换。（已打开文件夹）"},
+                status_code=400)
+        try:
+            os.replace(str(newf), str(cur))
+            _ulog("步骤2 OK：新版已就位为正式 exe")
+        except Exception as e:
+            _ulog(f"步骤2 失败：新版就位出错：{e} → 回滚")
+            try:
+                os.replace(str(oldf), str(cur))
+            except Exception:
+                pass
+            os.startfile(str(cur.parent))
+            return JSONResponse(
+                {"error": f"新版就位失败（{e}）。已回滚，请手动替换。（已打开文件夹）"},
+                status_code=400)
+
+        # 启动新版 + 退出
         pid = os.getpid()
         ps_script = (
             "$ErrorActionPreference='SilentlyContinue'\n"
             f"while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 400 }}\n"
-            "for ($j=0; $j -lt 120; $j++) {\n"   # 最多重试 2 分钟，扛过 Defender 对新 exe 的扫描锁
-            f'  try {{ Move-Item -Force -LiteralPath "{newf}" -Destination "{cur}" -ErrorAction Stop; break }}\n'
-            "  catch { Start-Sleep -Milliseconds 1000 }\n"
-            "}\n"
+            "Start-Sleep -Milliseconds 800\n"
             f'Start-Process -FilePath "{cur}"\n'
         )
         enc = base64.b64encode(ps_script.encode("utf-16-le")).decode()
@@ -1143,10 +1206,11 @@ async def api_do_update():
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-WindowStyle", "Hidden", "-EncodedCommand", enc],
             creationflags=DETACHED | NO_WINDOW, cwd=str(cur.parent))
-        # 1 秒后退出，让更新器接管
+        _ulog("已启动重启器，1 秒后退出本进程。==== do_update 成功收尾 ====")
         threading.Timer(1.0, lambda: os._exit(0)).start()
         return {"ok": True, "version": info.get("version")}
     except Exception as e:
+        _ulog(f"do_update 异常：{e}")
         return JSONResponse({"error": f"更新失败: {e}"}, status_code=400)
 
 

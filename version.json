@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5",
-  "notes": "发现爆款的时间范围新增「最近 12 小时」。以及自动更新、下载整个合集。",
+  "version": "1.0.6",
+  "notes": "自动更新改进：改用重命名方式覆盖（更稳），带分步日志与手动兜底。含下载整个合集、最近12小时。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.5/BaokuanMonitor-v1.0.5.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.6/BaokuanMonitor-v1.0.6.exe"
 }
