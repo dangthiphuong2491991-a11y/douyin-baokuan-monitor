@@ -1,0 +1,90 @@
+# -*- coding: utf-8 -*-
+"""桌面软件入口：后台跑 FastAPI，前台开原生窗口（造梦工坊风格 UI）"""
+import threading
+import time
+import socket
+
+import uvicorn
+import webview
+
+import app as appmod
+from app import app, PORT
+
+
+def _port_ready(host="127.0.0.1", port=PORT, timeout=15):
+    end = time.time() + timeout
+    while time.time() < end:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex((host, port)) == 0:
+                return True
+        time.sleep(0.2)
+    return False
+
+
+def _serve():
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
+
+
+def _extract_cookies(cookies) -> dict:
+    """把 pywebview get_cookies() 的返回统一成 {name: value}"""
+    jar = {}
+    for c in cookies or []:
+        if hasattr(c, "name") and hasattr(c, "value"):        # http.cookiejar.Cookie
+            jar[c.name] = c.value
+        elif hasattr(c, "items"):                              # SimpleCookie / dict
+            for k, m in c.items():
+                jar[k] = getattr(m, "value", m)
+    return jar
+
+
+class JsApi:
+    """暴露给前端 window.pywebview.api 调用（跑在 pywebview 桥线程，可安全操作窗口）"""
+
+    def login_qr(self):
+        try:
+            win = webview.create_window(
+                "登录抖音 · 用手机抖音扫码或账号登录",
+                "https://www.douyin.com/",
+                width=1040, height=760,
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"打开登录窗口失败: {e}"}
+
+        found = None
+        for _ in range(180):  # 最多等 3 分钟
+            time.sleep(1)
+            try:
+                jar = _extract_cookies(win.get_cookies())
+            except Exception:
+                continue
+            if "sessionid" in jar:
+                found = "; ".join(f"{k}={v}" for k, v in jar.items())
+                break
+        try:
+            win.destroy()
+        except Exception:
+            pass
+
+        if found:
+            appmod.set_login_cookie(found)
+            return {"ok": True}
+        return {"ok": False, "error": "超时未检测到登录（3分钟内没扫码或没登录成功）"}
+
+
+if __name__ == "__main__":
+    threading.Thread(target=_serve, daemon=True).start()
+    _port_ready()
+    jsapi = JsApi()
+    # 给 /api/login_qr 兜底用（前端优先直接调 pywebview.api）
+    appmod._login_callback = lambda: jsapi.login_qr().get("ok")
+    webview.create_window(
+        "爆款监控 · 抖音博主更新雷达",
+        f"http://127.0.0.1:{PORT}/",
+        width=1200,
+        height=780,
+        min_size=(940, 620),
+        background_color="#12141c",
+        js_api=jsapi,
+    )
+    webview.start()

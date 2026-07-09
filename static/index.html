@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>爆款监控</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#12141c; --sidebar:#171a24; --card:#1c1f2b; --card2:#232734; --line:#2a2e3c;
+    --txt:#e8eaf2; --sub:#8b93a7; --dim:#5b6376;
+    --acc:#6c5ce7; --acc2:#a29bfe; --grad:linear-gradient(135deg,#6c5ce7,#8b7cf6);
+    --ok:#25d07d; --warn:#ffb020; --red:#fe4d6a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--txt);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#2f3444;border-radius:6px}
+  ::-webkit-scrollbar-thumb:hover{background:#3a4055}
+
+  .app{display:flex;height:100vh}
+
+  /* ---------- sidebar ---------- */
+  .side{width:216px;background:var(--sidebar);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
+  .brand{display:flex;align-items:center;gap:11px;padding:20px 18px 18px}
+  .brand .logo{width:38px;height:38px;border-radius:11px;background:var(--grad);display:grid;place-items:center;font-size:20px;box-shadow:0 4px 14px rgba(108,92,231,.4)}
+  .brand .t1{font-size:16px;font-weight:800;letter-spacing:.5px}
+  .brand .t2{font-size:11px;color:var(--sub)}
+  .nav{flex:1;overflow-y:auto;padding:6px 12px}
+  .nav .grp{font-size:11px;color:var(--dim);letter-spacing:1.5px;margin:16px 10px 7px;font-weight:700}
+  .nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--sub);cursor:pointer;font-size:14px;font-weight:500;position:relative;transition:.15s;user-select:none}
+  .nav a .ic{width:19px;text-align:center;font-size:16px}
+  .nav a:hover{background:var(--card2);color:var(--txt)}
+  .nav a.on{background:var(--grad);color:#fff;box-shadow:0 4px 14px rgba(108,92,231,.35)}
+  .nav a .badge{margin-left:auto;background:var(--red);color:#fff;font-size:11px;font-weight:700;min-width:19px;height:19px;border-radius:10px;display:grid;place-items:center;padding:0 5px}
+  .nav a.on .badge{background:rgba(255,255,255,.25)}
+  .side .foot{padding:14px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--sub);display:flex;align-items:center;gap:8px}
+  .side .foot .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.4}}
+
+  /* ---------- main ---------- */
+  .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .topbar{display:flex;align-items:center;padding:0 30px;height:62px;border-bottom:1px solid var(--line);flex-shrink:0}
+  .topbar h1{font-size:19px;font-weight:800}
+  .topbar .meta{margin-left:auto;color:var(--sub);font-size:12.5px;text-align:right;line-height:1.5}
+  .content{flex:1;overflow-y:auto;padding:26px 30px 40px}
+  .page{display:none;animation:fade .25s ease}
+  .page.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}}
+
+  /* ---------- shared ---------- */
+  h2.hero{font-size:26px;font-weight:800;margin-bottom:6px}
+  h2.hero .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{color:var(--sub);margin-bottom:22px}
+  .btn{background:var(--grad);border:0;border-radius:10px;color:#fff;padding:11px 18px;cursor:pointer;font-size:14px;font-weight:600;transition:.15s;box-shadow:0 4px 14px rgba(108,92,231,.3)}
+  .btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .btn:active{transform:none}
+  .btn.ghost{background:var(--card2);border:1px solid var(--line);color:var(--sub);box-shadow:none}
+  .btn.ghost:hover{color:var(--txt);border-color:var(--acc)}
+  .btn:disabled{opacity:.5;cursor:wait;transform:none}
+  input,select{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--txt);outline:none;font-size:14px;font-family:inherit}
+  input:focus,select:focus{border-color:var(--acc)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px}
+  .stat{padding:18px 20px}
+  .stat .k{color:var(--sub);font-size:13px;margin-bottom:7px}
+  .stat .v{font-size:28px;font-weight:800}
+  .stat .v.g{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+  .addbar{display:flex;gap:10px;padding:16px;margin-bottom:20px}
+  .addbar input{flex:1}
+
+  .bloggers{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+  .bcard{display:flex;align-items:center;gap:13px;padding:16px}
+  .bcard img{width:52px;height:52px;border-radius:50%;object-fit:cover;background:#2a2e3c;flex-shrink:0}
+  .bcard .info{flex:1;min-width:0}
+  .bcard .nm{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bcard .sb{color:var(--sub);font-size:12.5px;margin-top:2px}
+  .bcard .x{background:none;border:0;color:var(--dim);font-size:17px;cursor:pointer;padding:6px}
+  .bcard .x:hover{color:var(--red)}
+
+  .feed{display:flex;flex-direction:column;gap:14px}
+  .up{display:flex;gap:16px;padding:16px}
+  .up .cov{width:104px;height:138px;border-radius:10px;object-fit:cover;background:#2a2e3c;cursor:pointer;flex-shrink:0}
+  .up .bd{flex:1;min-width:0}
+  .up .who{color:var(--acc2);font-size:13px;font-weight:600}
+  .up .desc{font-weight:700;font-size:16px;margin:3px 0 6px}
+  .up .meta{color:var(--sub);font-size:12.5px;margin-bottom:9px}
+  .up .row{display:flex;gap:15px;color:var(--sub);font-size:12.5px;margin-bottom:11px;flex-wrap:wrap;align-items:center}
+  .up .ops{display:flex;gap:9px;flex-wrap:wrap}
+  .tag{font-size:11px;padding:3px 10px;border-radius:20px;background:var(--card2);border:1px solid var(--line);color:var(--sub)}
+  .tag.ok{color:var(--ok);border-color:rgba(37,208,125,.4)}
+  .tag.fail{color:var(--red);border-color:rgba(254,77,106,.4)}
+  .tag.load{color:var(--acc2);border-color:rgba(162,155,254,.4)}
+
+  .dlgrp{margin-bottom:26px}
+  .dlgrp .h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .dlgrp .h .nm{font-weight:700;font-size:16px}
+  .dlgrp .h .c{color:var(--sub);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .dl{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.15s}
+  .dl:hover{transform:translateY(-3px);border-color:var(--acc)}
+  .dl .thumb{width:100%;aspect-ratio:3/4;object-fit:cover;background:#2a2e3c;display:block}
+  .dl .cap{padding:8px 10px;font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dl .cap b{color:var(--txt)}
+
+  .setrow{padding:18px 20px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--line)}
+  .setrow:last-child{border-bottom:0}
+  .setrow .l{flex:1}
+  .setrow .l .t{font-weight:600}
+  .setrow .l .d{color:var(--sub);font-size:12.5px;margin-top:2px}
+
+  /* 来源切换 tab */
+  .tab{background:var(--card2);border:1px solid var(--line);color:var(--sub);padding:9px 16px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600}
+  .tab:hover{color:var(--txt)}
+  .tab.on{background:var(--grad);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(108,92,231,.3)}
+  /* 作品浏览 */
+  .ptoolbar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+  .ptoolbar .sp{margin-left:auto;color:var(--sub);font-size:13px}
+  .posts{display:grid;grid-template-columns:repeat(auto-fill,minmax(162px,1fr));gap:14px}
+  .post{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.15s;position:relative}
+  .post:hover{transform:translateY(-3px);border-color:var(--acc2)}
+  .post.sel{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc)}
+  .post .pcover{position:relative;aspect-ratio:3/4;background:#2a2e3c}
+  .post .pcover img{width:100%;height:100%;object-fit:cover;display:block}
+  .post .ptype{position:absolute;left:7px;bottom:7px;background:rgba(0,0,0,.62);color:#fff;font-size:11px;padding:2px 7px;border-radius:6px}
+  .post .pcheck{position:absolute;top:7px;right:7px;width:23px;height:23px;border-radius:50%;background:rgba(0,0,0,.4);border:2px solid #fff;color:transparent;font-size:13px;font-weight:bold;display:grid;place-items:center;transition:.12s}
+  .post.sel .pcheck{background:var(--acc);border-color:var(--acc);color:#fff}
+  .post .pdone{position:absolute;top:7px;left:7px;background:var(--ok);color:#08150d;font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px}
+  .post.done{opacity:.68}
+  .post .pcap{padding:8px 10px 2px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .post .pstat{padding:0 10px 9px;font-size:12px;color:var(--sub)}
+  /* 播放按钮浮标 */
+  .playbtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center;font-size:17px;padding-left:3px;pointer-events:none;transition:.15s}
+  .cov{cursor:pointer}
+  .up:hover .playbtn,.post:hover .playbtn,.dl:hover .playbtn{background:var(--acc)}
+  /* 播放弹层 */
+  .pmask{position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(4px);z-index:200;display:none;align-items:center;justify-content:center;padding:24px}
+  .pmask.on{display:flex;animation:fade .2s ease}
+  .pbox{background:var(--card);border:1px solid var(--line);border-radius:16px;max-width:520px;width:100%;max-height:92vh;overflow:auto;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .pclose{position:absolute;top:10px;right:10px;z-index:3;width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,.5);border:0;color:#fff;font-size:16px;cursor:pointer}
+  .pclose:hover{background:var(--acc)}
+  .ptitle{padding:15px 18px 8px;font-weight:700;font-size:15px;padding-right:46px}
+  .pbody{background:#000;display:flex;align-items:center;justify-content:center;min-height:200px}
+  .pbody video{width:100%;max-height:72vh;display:block;background:#000}
+  .pbody img{width:100%;display:block}
+  .pgallery{display:flex;flex-direction:column;gap:6px;background:#000}
+  .pfoot{padding:12px 18px;display:flex;gap:9px;flex-wrap:wrap}
+  .ploading{color:var(--sub);padding:60px 0;text-align:center}
+  .empty{color:var(--sub);text-align:center;padding:70px 0}
+  .empty .big{font-size:44px;margin-bottom:12px;opacity:.5}
+  .err{color:var(--warn);font-size:12.5px;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">📡</div>
+      <div><div class="t1">爆款监控</div><div class="t2">抖音更新雷达</div></div>
+    </div>
+    <nav class="nav">
+      <div class="grp">监控</div>
+      <a data-page="home" class="on"><span class="ic">👤</span>博主监控</a>
+      <a data-page="feed"><span class="ic">🆕</span>更新动态<span class="badge" id="navBadge" style="display:none">0</span></a>
+      <a data-page="discover"><span class="ic">🔥</span>发现爆款</a>
+      <a data-page="lib"><span class="ic">📦</span>下载库</a>
+      <div class="grp">配置</div>
+      <a data-page="set"><span class="ic">⚙️</span>设置</a>
+    </nav>
+    <div class="foot" style="flex-direction:column;align-items:flex-start;gap:6px">
+      <div style="display:flex;align-items:center;gap:8px"><span class="dot"></span><span id="footStatus">监控运行中</span></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)">
+        <span id="appVer">v1.0.0</span>
+        <a onclick="checkUpdate(true)" style="color:var(--acc2);cursor:pointer">检查更新</a>
+        <span id="updDot" style="display:none;color:var(--red)">● 有新版</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="topbar">
+      <h1 id="pageTitle">博主监控</h1>
+      <div class="meta">上次检查 <b id="lastCheck">—</b><br>每 <span id="curInterval">5</span> 分钟自动检查</div>
+    </div>
+    <div class="content">
+
+      <!-- 博主监控 -->
+      <section class="page on" id="page-home">
+        <!-- 第一步：登录 -->
+        <div class="card" id="loginCard" style="padding:16px 18px;margin-bottom:20px;border-color:var(--acc)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tag" style="background:var(--grad);color:#fff;border:0">第一步</span>
+            <span style="font-weight:800;font-size:16px">抖音登录</span>
+            <span id="loginBadge" class="tag" style="margin-left:2px">未登录</span>
+          </div>
+          <div class="d" style="color:var(--sub);font-size:13px;margin-top:8px">先登录，每个博主才能翻页拿到更多作品、排出真正的「前N」。<b>播放量抖音接口始终不返回，前N按点赞排。</b></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="loginQR(this)">📱 扫码登录</button>
+            <button class="btn ghost" onclick="loginBrowser(this)">🌐 从浏览器导入</button>
+            <button class="btn ghost" onclick="pasteCookie()">📋 粘贴 Cookie</button>
+            <button class="btn ghost" id="logoutBtn" onclick="logout()" style="display:none">退出登录</button>
+          </div>
+          <div style="color:var(--dim);font-size:12px;margin-top:8px">扫码：弹出抖音页用手机扫码 ｜ 浏览器导入：先在 Chrome/Edge 登录 douyin.com 再点 ｜ 粘贴：从浏览器复制 cookie</div>
+        </div>
+
+        <h2 class="hero">监控你关注的<span class="g">爆款博主</span></h2>
+        <div class="lead">博主一发新作品，立刻弹窗提醒；在「更新动态」里可直接播放或手动下载。</div>
+        <div class="stats">
+          <div class="stat card"><div class="k">监控博主</div><div class="v g" id="stBloggers">0</div></div>
+          <div class="stat card"><div class="k">累计发现更新</div><div class="v" id="stUpdates">0</div></div>
+          <div class="stat card"><div class="k">已下载文件</div><div class="v" id="stFiles">—</div></div>
+        </div>
+        <div class="addbar card">
+          <input id="urlInput" placeholder="粘贴博主主页链接（抖音 → 分享 → 复制链接），回车添加">
+          <button class="btn" id="addBtn" onclick="addBlogger()">➕ 添加监控</button>
+          <button class="btn ghost" onclick="checkNow(this)">🔄 立即检查</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+          <button class="btn ghost" onclick="exportBloggers()">📤 导出博主列表</button>
+          <button class="btn ghost" onclick="importBloggers()">📥 导入博主列表</button>
+          <span style="color:var(--dim);font-size:12px;align-self:center">换电脑时：导出成文件 → 拷到新电脑 → 导入，博主一键搬走（不含登录信息）</span>
+        </div>
+        <div id="bloggerList" class="bloggers"></div>
+      </section>
+
+      <!-- 更新动态 -->
+      <section class="page" id="page-feed">
+        <h2 class="hero">更新<span class="g">动态</span></h2>
+        <div class="lead">按博主分类，显示每个博主更新了多少条；点进去看具体明细。</div>
+        <div id="feed" class="feed"></div>
+      </section>
+
+      <!-- 发现爆款 -->
+      <section class="page" id="page-discover">
+        <h2 class="hero">查找<span class="g">24小时爆款</span></h2>
+        <div class="lead">在你库里的博主中查找达标视频；也可用种子视频从相关推荐里挖新号。</div>
+        <div class="tabs" style="display:flex;gap:8px;margin-bottom:16px">
+          <button class="tab on" data-src="library" onclick="switchSrc('library')">📚 我的库（库内博主）</button>
+          <button class="tab" data-src="related" onclick="switchSrc('related')">🔥 相关推荐（挖新号）</button>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:18px">
+          <div id="seedWrap" style="display:none">
+            <textarea id="seedInput" rows="3" placeholder="每行一条种子视频链接/分享口令，例如：&#10;https://v.douyin.com/xxxxx/&#10;（种子决定题材：贴历史讲解就挖历史爆款，贴美食就挖美食爆款）"
+              style="width:100%;resize:vertical;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--txt);font:inherit;outline:none"></textarea>
+          </div>
+          <div id="libHint" style="color:var(--sub);font-size:13px">扫描你「博主监控」库里的 <b id="libCount">0</b> 个博主，把<b>时间范围内</b>的作品按<b>点赞从高到低</b>排，取前 50。</div>
+          <div class="row" style="display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap">
+            <label id="minLikeWrap" style="color:var(--sub);font-size:13px">点赞门槛 ≥
+              <input type="number" id="minLike" value="20000" min="0" step="1000" placeholder="自己填"
+                style="width:120px;margin-left:6px">
+              <span id="minLikeHint" style="color:var(--dim);margin-left:4px"></span>
+            </label>
+            <label style="color:var(--sub);font-size:13px">时间范围
+              <select id="hours" style="margin-left:6px">
+                <option value="24">最近 24 小时</option>
+                <option value="48">最近 48 小时</option>
+                <option value="72">最近 3 天</option>
+                <option value="168" selected>最近 7 天</option>
+                <option value="720">最近 30 天</option>
+                <option value="0">不限时间（按点赞排全部）</option>
+              </select>
+            </label>
+            <label id="pagesWrap" style="color:var(--sub);font-size:13px;display:none">抓取深度
+              <select id="pages" style="margin-left:6px">
+                <option value="1">快速（1页·约20条）</option>
+                <option value="2" selected>标准（2页·约40条）</option>
+                <option value="3">深挖（3页·较慢）</option>
+              </select>
+            </label>
+            <button class="btn" id="discBtn" onclick="runDiscover(this)" style="margin-left:auto">🔍 在库里查找</button>
+          </div>
+          <div id="relatedNote" style="color:var(--dim);font-size:12px;margin-top:10px;display:none">⚠ 相关推荐接口有防风控节流，每页间隔约 30 秒，抓 2 页大约需 1 分钟，请耐心等。</div>
+        </div>
+        <div class="ptoolbar" id="discTools" style="display:none">
+          <button class="btn ghost" onclick="selectAllDisc()">☑ 全选未下载</button>
+          <button class="btn" id="dlDiscBtn" disabled onclick="downloadDisc(this)">⬇ 下载选中 (<span id="discSelCount">0</span>)</button>
+          <span class="sp" id="discMeta"></span>
+        </div>
+        <div id="discGrid" class="posts"></div>
+      </section>
+
+      <!-- 下载库 -->
+      <section class="page" id="page-lib">
+        <h2 class="hero">下载<span class="g">库</span></h2>
+        <div class="lead">所有自动下载的原片，按博主分类。点击缩略图播放。</div>
+        <div id="libBox"></div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="page" id="page-set">
+        <h2 class="hero">设置</h2>
+        <div class="lead">监控与通知相关配置。</div>
+        <div class="card" style="max-width:680px">
+          <div class="setrow" style="align-items:flex-start">
+            <div class="l">
+              <div class="t">下载保存位置</div>
+              <div class="d">所有下载的视频都存到这里，并自动按博主名分类建子文件夹</div>
+              <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input id="dlDirInput" style="min-width:340px;flex:1" placeholder="例如 D:\\抖音下载">
+                <button class="btn ghost" onclick="saveDir(this)">保存路径</button>
+              </div>
+            </div>
+            <button class="btn" onclick="chooseDir(this)">📂 选择文件夹</button>
+          </div>
+          <div class="setrow">
+            <div class="l"><div class="t">检查间隔</div><div class="d">每隔多久自动检查一次博主更新</div></div>
+            <select id="intervalSel" onchange="setIntervalVal()">
+              <option value="2">2 分钟</option><option value="5">5 分钟</option>
+              <option value="10">10 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option>
+            </select>
+          </div>
+          <div class="setrow">
+            <div class="l"><div class="t">弹窗通知</div><div class="d">测试 Windows 通知与提示音是否正常</div></div>
+            <button class="btn ghost" onclick="api('/api/test_notify','POST')">🔔 测试弹窗</button>
+          </div>
+          <div class="setrow">
+            <div class="l"><div class="t">下载文件夹</div><div class="d">在资源管理器中打开下载目录</div></div>
+            <button class="btn ghost" onclick="api('/api/reveal','POST')">📁 打开</button>
+          </div>
+        </div>
+        <div id="errBox" class="err"></div>
+      </section>
+
+      <!-- 博主作品（点博主进入，挑选下载） -->
+      <section class="page" id="page-posts">
+        <button class="btn ghost" style="margin-bottom:16px" onclick="gotoHome()">← 返回博主列表</button>
+        <h2 class="hero" id="postsTitle">博主的<span class="g">作品</span></h2>
+        <div class="lead">点击封面勾选想要的作品，再点「下载选中」。绿色角标表示已下载过。</div>
+        <div class="ptoolbar">
+          <button class="btn ghost" onclick="selectAll()">☑ 全选未下载</button>
+          <button class="btn" id="dlSelBtn" disabled onclick="downloadSelected(this)">⬇ 下载选中 (<span id="selCount">0</span>)</button>
+          <span class="sp" id="postsMeta"></span>
+        </div>
+        <div id="postsGrid" class="posts"></div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- 播放弹层 -->
+<div id="player" class="pmask" onclick="if(event.target===this)closePlayer()">
+  <div class="pbox">
+    <button class="pclose" onclick="closePlayer()">✕</button>
+    <div class="ptitle" id="pTitle"></div>
+    <div class="pbody" id="pBody"></div>
+    <div class="pfoot" id="pFoot"></div>
+  </div>
+</div>
+
+<script>
+let lastCount = null, curStatus = null;
+
+async function api(url, method='GET', body){
+  const r = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
+
+/* nav */
+const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',set:'设置'};
+document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
+  document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
+  a.classList.add('on');
+  const p=a.dataset.page;
+  document.querySelectorAll('.page').forEach(s=>s.classList.remove('on'));
+  document.getElementById('page-'+p).classList.add('on');
+  document.getElementById('pageTitle').textContent=titles[p];
+  if(p==='lib') loadLib();
+});
+
+function render(st){
+  curStatus = st;
+  document.getElementById('lastCheck').textContent = st.last_check || '启动中…';
+  document.getElementById('curInterval').textContent = st.interval_minutes;
+  document.getElementById('intervalSel').value = String(st.interval_minutes);
+  document.getElementById('stBloggers').textContent = st.bloggers.length;
+  document.getElementById('stUpdates').textContent = st.updates.length;
+  const lc=document.getElementById('libCount'); if(lc) lc.textContent=st.bloggers.length;
+  const di=document.getElementById('dlDirInput'); if(di && document.activeElement!==di) di.value=st.download_dir||'';
+  const lb=document.getElementById('loginBadge'), lo=document.getElementById('logoutBtn');
+  if(lb){ lb.textContent=st.logged_in?'已登录':'未登录'; lb.className='tag '+(st.logged_in?'ok':''); if(lo) lo.style.display=st.logged_in?'inline-block':'none'; }
+
+  const badge = document.getElementById('navBadge');
+  if(st.updates.length){badge.style.display='grid';badge.textContent=st.updates.length>99?'99+':st.updates.length}
+
+  // bloggers
+  document.getElementById('bloggerList').innerHTML = st.bloggers.length ? st.bloggers.map(b=>`
+    <div class="bcard card" style="cursor:pointer" title="点击查看 TA 的作品并挑选下载" onclick="openPosts('${b.sec_user_id}')">
+      <img src="${esc(b.avatar)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+      <div class="info">
+        <div class="nm">${esc(b.nickname)}</div>
+        <div class="sb">粉丝 ${b.follower_count??'—'} · 作品 ${b.aweme_count??'—'} · 查看作品 →</div>
+      </div>
+      <button class="x" title="移除" onclick="event.stopPropagation();delBlogger('${b.sec_user_id}')">✕</button>
+    </div>`).join('') : emptyBox('👀','还没有添加博主','在上方粘贴博主主页链接开始监控');
+
+  // feed（按博主分类，两级）
+  renderFeed();
+
+  document.getElementById('errBox').textContent = (st.errors&&st.errors.length)?('⚠ '+st.errors[0].time+' '+st.errors[0].msg):'';
+
+  if(lastCount!==null && st.updates.length>lastCount) beep();
+  lastCount = st.updates.length;
+}
+
+function emptyBox(icon,t,d){return `<div class="empty" style="grid-column:1/-1"><div class="big">${icon}</div><div style="font-size:16px;color:var(--txt)">${t}</div><div style="margin-top:5px">${d}</div></div>`}
+
+async function loadLib(){
+  const box = document.getElementById('libBox');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try{
+    const {groups} = await api('/api/downloads');
+    let total = groups.reduce((s,g)=>s+g.count,0);
+    document.getElementById('stFiles').textContent = total;
+    box.innerHTML = groups.length ? groups.map(g=>`
+      <div class="dlgrp">
+        <div class="h"><span class="nm">📁 ${esc(g.blogger)}</span><span class="c">${g.count} 个文件</span>
+          <button class="btn ghost" style="margin-left:auto;padding:6px 12px" onclick="api('/api/reveal_blogger/'+encodeURIComponent('${esc(g.blogger)}'),'POST')">打开文件夹</button></div>
+        <div class="grid">${g.files.map(f=>`
+          <div class="dl" onclick="${f.is_video?`openPlayer('','视频','${esc(f.name).replace(/'/g,"\\'")}','${esc(f.url)}')`:`window.open('${esc(f.url)}')`}">
+            ${f.is_video
+              ? `<div class="thumb" style="display:grid;place-items:center;font-size:34px;position:relative">🎬<span class="playbtn" style="font-size:14px">▶</span></div>`
+              : `<img class="thumb" src="${esc(f.url)}">`}
+            <div class="cap">${f.is_video?'▶ ':''}<b>${f.size}</b> MB</div>
+          </div>`).join('')}</div>
+      </div>`).join('') : emptyBox('📦','下载库还是空的','发现新作品后会自动下载到这里');
+  }catch(e){ box.innerHTML = emptyBox('⚠','加载失败',e.message) }
+}
+
+/* ---- 博主作品浏览 + 挑选下载 ---- */
+let curPosts=[], selectedIds=new Set(), curPostsSec=null;
+
+function gotoHome(){ document.querySelector('.nav a[data-page="home"]').click(); }
+
+async function openPosts(sec){
+  const b=(curStatus?.bloggers||[]).find(x=>x.sec_user_id===sec);
+  curPostsSec=sec; selectedIds.clear();
+  document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.page').forEach(s=>s.classList.remove('on'));
+  document.getElementById('page-posts').classList.add('on');
+  const nm=b?b.nickname:'博主';
+  document.getElementById('pageTitle').textContent=nm+' 的作品';
+  document.getElementById('postsTitle').innerHTML='@'+esc(nm)+' 的<span class="g">作品</span>';
+  document.getElementById('postsMeta').textContent='';
+  const grid=document.getElementById('postsGrid');
+  grid.innerHTML='<div class="empty"><div class="big">⏳</div>正在拉取作品列表…</div>';
+  try{
+    const d=await api('/api/blogger_posts/'+sec);
+    curPosts=d.posts||[];
+    document.getElementById('postsMeta').textContent='共 '+curPosts.length+' 个作品';
+    renderPosts();
+  }catch(e){ grid.innerHTML=emptyBox('⚠','加载失败',e.message); }
+}
+
+function renderPosts(){
+  const grid=document.getElementById('postsGrid');
+  grid.innerHTML=curPosts.length? curPosts.map(p=>`
+    <div class="post ${selectedIds.has(p.aweme_id)?'sel':''} ${p.downloaded?'done':''}" data-aid="${p.aweme_id}" onclick="togglePost('${p.aweme_id}')">
+      <div class="pcover">
+        ${p.cover?`<img src="${esc(p.cover)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`:''}
+        <span class="playbtn" style="pointer-events:auto;cursor:pointer" onclick="event.stopPropagation();openPlayer('${p.aweme_id}','${esc(p.type)}','${esc(p.desc).replace(/'/g,"\\'")}')">▶</span>
+        <span class="ptype">${esc(p.type)}${p.duration?' · '+esc(p.duration):''}</span>
+        <span class="pcheck">✓</span>
+        ${p.downloaded?'<span class="pdone">已下载</span>':''}
+      </div>
+      <div class="pcap" title="${esc(p.desc)}">${esc(p.desc)}</div>
+      <div class="pstat">👍 ${p.digg} · ${esc(p.create_time.slice(0,10))}</div>
+    </div>`).join('') : emptyBox('📭','没有拉到作品','可能触发风控，稍后再点博主试试');
+  updateBar();
+}
+
+function togglePost(aid){
+  if(selectedIds.has(aid)) selectedIds.delete(aid); else selectedIds.add(aid);
+  const el=document.querySelector('.post[data-aid="'+CSS.escape(aid)+'"]');
+  if(el) el.classList.toggle('sel');
+  updateBar();
+}
+
+function updateBar(){
+  document.getElementById('selCount').textContent=selectedIds.size;
+  document.getElementById('dlSelBtn').disabled=selectedIds.size===0;
+}
+
+function selectAll(){
+  const undone=curPosts.filter(p=>!p.downloaded);
+  const allSel=undone.length && undone.every(p=>selectedIds.has(p.aweme_id));
+  if(allSel) selectedIds.clear(); else undone.forEach(p=>selectedIds.add(p.aweme_id));
+  renderPosts();
+}
+
+async function downloadSelected(btn){
+  if(!selectedIds.size) return;
+  const ids=[...selectedIds], old=btn.innerHTML;
+  btn.disabled=true; btn.textContent=`下载中 ${ids.length} 个…`;
+  try{
+    const d=await api('/api/download_selected','POST',{sec_user_id:curPostsSec,aweme_ids:ids});
+    btn.textContent=`✓ 成功 ${d.success}/${d.total}`;
+    selectedIds.clear();
+    await openPosts(curPostsSec);
+    setTimeout(()=>{btn.innerHTML=old;updateBar();},2200);
+  }catch(e){ alert(e.message); btn.innerHTML=old; btn.disabled=false; }
+}
+
+/* ---- 查找爆款（库内 / 相关推荐 两种来源）---- */
+let discItems=[], discSel=new Set(), discSrc='library';
+
+// 点赞门槛输入时实时显示「X万」
+(function(){
+  const inp=document.getElementById('minLike'), hint=document.getElementById('minLikeHint');
+  if(inp&&hint){ const upd=()=>{ const v=parseInt(inp.value)||0; hint.textContent=v>=10000?'（'+(v/10000).toFixed(1).replace(/\.0$/,'')+'万）':''; };
+    inp.addEventListener('input',upd); upd(); }
+})();
+
+function switchSrc(src){
+  discSrc=src;
+  document.querySelectorAll('#page-discover .tab').forEach(t=>t.classList.toggle('on',t.dataset.src===src));
+  document.getElementById('seedWrap').style.display = src==='related'?'block':'none';
+  document.getElementById('libHint').style.display = src==='library'?'block':'none';
+  document.getElementById('minLikeWrap').style.display = src==='related'?'inline-block':'none';
+  document.getElementById('pagesWrap').style.display = src==='related'?'inline-block':'none';
+  document.getElementById('relatedNote').style.display = src==='related'?'block':'none';
+  document.getElementById('discBtn').textContent = src==='library'?'🔍 在库里查找':'🔍 开始挖掘';
+}
+
+async function runDiscover(btn){
+  const min_like=parseInt(document.getElementById('minLike').value)||0;
+  const hours=parseInt(document.getElementById('hours').value)||0;
+  discSel.clear();
+  document.getElementById('discTools').style.display='none';
+  const grid=document.getElementById('discGrid');
+  try{
+    let d;
+    if(discSrc==='library'){
+      const n=(curStatus?.bloggers||[]).length;
+      if(!n){ alert('你的库里还没有博主，先去「博主监控」加几个'); return; }
+      btn.disabled=true; btn.textContent='🔎 查找中…';
+      grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…</div>`;
+      d=await api('/api/library_search','POST',{hours});
+      const win=hours?`${hours}h内`:'全部';
+      document.getElementById('discMeta').textContent=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，按点赞取前 ${d.count}`;
+    }else{
+      const seeds=document.getElementById('seedInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
+      if(!seeds.length){ alert('先粘贴至少一条种子视频链接'); return; }
+      const pages=parseInt(document.getElementById('pages').value);
+      btn.disabled=true; btn.textContent='🔎 挖掘中…（约1分钟）';
+      grid.innerHTML='<div class="empty"><div class="big">⏳</div>正在抓取相关推荐并筛选爆款…<br>相关推荐每页间隔30秒，请稍候</div>';
+      d=await api('/api/discover','POST',{seeds,min_like,hours,pages});
+      document.getElementById('discMeta').textContent=`扫描 ${d.scanned} 条，命中 ${d.count} 条（${hours}h内·赞≥${fmtN(min_like)}）`;
+    }
+    discItems=d.items||[];
+    renderDisc();
+    document.getElementById('discTools').style.display=discItems.length?'flex':'none';
+  }catch(e){ grid.innerHTML=emptyBox('⚠','查找失败',e.message); }
+  btn.disabled=false; btn.textContent=discSrc==='library'?'🔍 在库里查找':'🔍 开始挖掘';
+}
+
+function renderDisc(){
+  const grid=document.getElementById('discGrid');
+  grid.innerHTML=discItems.length? discItems.map(p=>`
+    <div class="post ${discSel.has(p.aweme_id)?'sel':''} ${p.downloaded?'done':''}" data-aid="${p.aweme_id}" onclick="toggleDisc('${p.aweme_id}')">
+      <div class="pcover">
+        ${p.cover?`<img src="${esc(p.cover)}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`:''}
+        <span class="playbtn" style="pointer-events:auto;cursor:pointer" onclick="event.stopPropagation();openPlayer('${p.aweme_id}','${esc(p.type)}','${esc(p.desc).replace(/'/g,"\\'")}')">▶</span>
+        <span class="ptype">👍 ${fmtN(p.digg)} · ${esc(p.duration||p.type)}</span>
+        <span class="pcheck">✓</span>
+        ${p.downloaded?'<span class="pdone">已下载</span>':''}
+        ${p.is_monitored?'<span class="pdone" style="background:var(--acc2);color:#fff;left:auto;right:34px">已监控</span>':''}
+      </div>
+      <div class="pcap" title="${esc(p.desc)}">${esc(p.desc)}</div>
+      <div class="pstat">@${esc(p.author)} · ${p.age_hours}h前</div>
+    </div>`).join('') : emptyBox('🕳️',
+      discSrc==='library'?'这个时间范围内，库里博主没有发布作品':'没有符合条件的爆款',
+      discSrc==='library'?'把时间范围放宽（最近7天/30天）再试；或去「博主监控」加更活跃、经常出爆款的号':'试试：降低点赞门槛 / 放宽到48h / 换更火的种子视频');
+  updateDiscBar();
+}
+function fmtN(n){ return n>=10000?(n/10000).toFixed(1).replace(/\.0$/,'')+'万':n }
+function toggleDisc(aid){
+  if(discSel.has(aid)) discSel.delete(aid); else discSel.add(aid);
+  const el=document.querySelector('#discGrid .post[data-aid="'+CSS.escape(aid)+'"]');
+  if(el) el.classList.toggle('sel');
+  updateDiscBar();
+}
+function updateDiscBar(){
+  document.getElementById('discSelCount').textContent=discSel.size;
+  document.getElementById('dlDiscBtn').disabled=discSel.size===0;
+}
+function selectAllDisc(){
+  const undone=discItems.filter(p=>!p.downloaded);
+  const all=undone.length && undone.every(p=>discSel.has(p.aweme_id));
+  if(all) discSel.clear(); else undone.forEach(p=>discSel.add(p.aweme_id));
+  renderDisc();
+}
+async function downloadDisc(btn){
+  if(!discSel.size) return;
+  const ids=[...discSel], old=btn.innerHTML;
+  btn.disabled=true; btn.textContent=`下载中 ${ids.length} 个…`;
+  try{
+    let success=0,total=0;
+    if(discSrc==='related'){
+      const d=await api('/api/download_selected','POST',{sec_user_id:'discover',aweme_ids:ids});
+      success=d.success; total=d.total;
+    }else{
+      // 库内结果按博主分组下载（各归各的文件夹）
+      const groups={};
+      discItems.filter(p=>ids.includes(p.aweme_id)).forEach(p=>{(groups[p.sec_user_id]=groups[p.sec_user_id]||[]).push(p.aweme_id)});
+      for(const sec in groups){
+        const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:groups[sec]});
+        success+=d.success; total+=d.total;
+      }
+    }
+    btn.textContent=`✓ 成功 ${success}/${total}`;
+    discItems.forEach(p=>{ if(ids.includes(p.aweme_id)) p.downloaded=true; });
+    discSel.clear(); renderDisc();
+    setTimeout(()=>{btn.innerHTML=old;updateDiscBar();},2200);
+  }catch(e){ alert(e.message); btn.innerHTML=old; btn.disabled=false; }
+}
+
+/* ---- 更新动态：按博主分类 + 下钻明细 ---- */
+let feedView = null;   // null=博主分组列表；否则=某博主 sec_user_id
+
+function upCard(u){
+  return `<div class="up card">
+    ${u.cover?`<div style="position:relative;flex-shrink:0;cursor:pointer" onclick="openPlayer('${u.aweme_id}','${esc(u.type)}','${esc(u.desc).replace(/'/g,"\\'")}')">
+      <img class="cov" src="${esc(u.cover)}"><span class="playbtn">▶</span></div>`:''}
+    <div class="bd">
+      <div class="who">@${esc(u.nickname)} 发布了新${esc(u.type)}</div>
+      <div class="desc">${esc(u.desc)}</div>
+      <div class="meta">发布 ${esc(u.create_time)} ｜ 发现 ${esc(u.found_at)}${u.duration?' ｜ 时长 '+esc(u.duration):''}</div>
+      <div class="row"><span>👍 ${u.digg}</span><span>💬 ${u.comment}</span><span>⭐ ${u.collect}</span><span>↗️ ${u.share}</span>
+        ${u.downloaded?'<span class="tag ok">已下载</span>':''}</div>
+      <div class="ops">
+        <button class="btn" onclick="openPlayer('${u.aweme_id}','${esc(u.type)}','${esc(u.desc).replace(/'/g,"\\'")}')">▶ 播放</button>
+        ${u.downloaded?'':`<button class="btn ghost" onclick="downloadUpdate(this,'${u.sec_user_id}','${u.aweme_id}')">⬇ 下载</button>`}
+        <a href="${esc(u.url)}" target="_blank" style="text-decoration:none"><button class="btn ghost">打开抖音</button></a>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openFeedBlogger(sec){ feedView=sec; renderFeed(); }
+function backFeed(){ feedView=null; renderFeed(); }
+
+function renderFeed(){
+  const st=curStatus; if(!st) return;
+  const box=document.getElementById('feed');
+  const ups=st.updates||[];
+  if(!ups.length){ box.innerHTML=emptyBox('🆕','暂无更新','有新作品会实时出现在这里并弹窗提醒'); return; }
+
+  if(feedView){
+    // 某博主明细
+    const list=ups.filter(u=>u.sec_user_id===feedView);
+    if(!list.length){ feedView=null; return renderFeed(); }
+    const nm=list[0].nickname, ndl=list.filter(u=>!u.downloaded).length;
+    box.innerHTML=`<button class="btn ghost" style="margin-bottom:14px" onclick="backFeed()">← 返回博主列表</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span style="font-weight:800;font-size:18px">@${esc(nm)}</span>
+        <span style="color:var(--sub);font-size:13px">更新 ${list.length} 条${ndl?` · ${ndl} 条未下载`:''}</span>
+      </div>` + list.map(upCard).join('');
+  }else{
+    // 博主分组列表
+    const groups={};
+    ups.forEach(u=>{ (groups[u.sec_user_id]=groups[u.sec_user_id]||[]).push(u); });
+    const arr=Object.keys(groups).map(sec=>{
+      const items=groups[sec];
+      return {sec, items, nick:items[0].nickname, last:items[0].found_at,
+              ndl:items.filter(u=>!u.downloaded).length};
+    }).sort((a,b)=>String(b.last).localeCompare(String(a.last)));
+    box.innerHTML=arr.map(g=>{
+      const b=(st.bloggers||[]).find(x=>x.sec_user_id===g.sec);
+      return `<div class="bcard card" style="cursor:pointer" onclick="openFeedBlogger('${g.sec}')">
+        <img src="${esc(b?b.avatar:'')}" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">
+        <div class="info">
+          <div class="nm">${esc(g.nick)}</div>
+          <div class="sb">更新 ${g.items.length} 条${g.ndl?` · ${g.ndl} 条未下载`:' · 都看过了'} · 最近 ${esc(String(g.last).slice(5,16))}</div>
+        </div>
+        <div style="text-align:center;flex-shrink:0">
+          <div style="font-size:24px;font-weight:800;color:var(--acc2);line-height:1">${g.items.length}</div>
+          <div style="font-size:11px;color:var(--dim)">条更新</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function beep(){
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    [[880,0],[1174,.16]].forEach(([f,t])=>{
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.frequency.value=f;o.connect(g);g.connect(ctx.destination);
+      g.gain.setValueAtTime(.22,ctx.currentTime+t);
+      g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+t+.24);
+      o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+.3);
+    });
+  }catch(e){}
+}
+
+async function addBlogger(){
+  const inp=document.getElementById('urlInput'),btn=document.getElementById('addBtn');
+  if(!inp.value.trim())return;
+  btn.disabled=true;btn.textContent='解析中…';
+  try{ await api('/api/bloggers','POST',{url:inp.value}); inp.value=''; await refresh(); }
+  catch(e){ alert(e.message); }
+  btn.disabled=false;btn.textContent='➕ 添加监控';
+}
+async function delBlogger(id){
+  if(!confirm('确定移除这个博主？（不会删除已下载的文件）'))return;
+  await api('/api/bloggers/'+id,'DELETE'); refresh();
+}
+/* ---- 播放器 ---- */
+function openPlayer(aid, type, desc, localSrc){
+  const m=document.getElementById('player');
+  document.getElementById('pTitle').textContent=desc||'播放';
+  const body=document.getElementById('pBody'), foot=document.getElementById('pFoot');
+  foot.innerHTML=aid?`<a href="https://www.douyin.com/video/${aid}" target="_blank" style="text-decoration:none"><button class="btn ghost">打开抖音</button></a>`:'';
+  if(type==='图集'){
+    body.innerHTML='<div class="ploading">加载图片中…</div>';
+    api('/api/aweme_images/'+aid).then(d=>{
+      body.innerHTML=(d.images&&d.images.length)
+        ? '<div class="pgallery">'+d.images.map(u=>`<img referrerpolicy="no-referrer" src="${esc(u)}">`).join('')+'</div>'
+        : '<div class="ploading">没有图片</div>';
+    }).catch(()=>{ body.innerHTML='<div class="ploading">加载失败</div>'; });
+  }else{
+    const src=localSrc||('/api/stream/'+aid);
+    body.innerHTML=`<video controls autoplay playsinline src="${esc(src)}"></video>`;
+  }
+  m.classList.add('on');
+}
+function closePlayer(){
+  document.getElementById('player').classList.remove('on');
+  document.getElementById('pBody').innerHTML='';   // 停止播放
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape')closePlayer(); });
+
+async function downloadUpdate(btn, sec, aid){
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='下载中…';
+  try{
+    const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:[aid]});
+    if(d.success){ toast('已下载到本地'); refresh(); }
+    else{ alert('下载失败'); btn.disabled=false; btn.innerHTML=old; }
+  }catch(e){ alert(e.message); btn.disabled=false; btn.innerHTML=old; }
+}
+
+/* ---- 导出/导入博主 ---- */
+async function exportBloggers(){
+  try{
+    const d=await api('/api/export_bloggers');
+    if(!d.bloggers.length){ alert('库里还没有博主，先添加几个再导出'); return; }
+    const blob=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='监控博主_'+d.exported_at.replace(/[: ]/g,'')+'.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+    toast('已导出 '+d.bloggers.length+' 个博主');
+  }catch(e){ alert(e.message); }
+}
+function importBloggers(){
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
+  inp.onchange=async()=>{
+    const f=inp.files[0]; if(!f) return;
+    let data; try{ data=JSON.parse(await f.text()); }catch(e){ alert('文件解析失败，不是有效的 JSON'); return; }
+    const bloggers=Array.isArray(data)?data:(data.bloggers||[]);
+    if(!bloggers.length){ alert('文件里没有博主数据'); return; }
+    try{ const r=await api('/api/import_bloggers','POST',{bloggers});
+      toast(`导入成功：新增 ${r.added} 个（现共 ${r.total} 个）`); refresh(); }
+    catch(e){ alert(e.message); }
+  };
+  inp.click();
+}
+
+/* ---- 检查软件更新 ---- */
+async function checkUpdate(manual){
+  try{
+    const d=await api('/api/check_update');
+    document.getElementById('appVer').textContent='v'+d.current;
+    if(d.has_update){
+      document.getElementById('updDot').style.display='inline';
+      if(manual && confirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n去下载页面？`)){
+        if(d.url) window.open(d.url,'_blank');
+      }
+    }else if(manual){
+      toast(d.note?('当前已是最新（'+d.note+'）'):'已是最新版本 v'+d.current);
+    }
+  }catch(e){ if(manual) alert('检查更新失败：'+e.message); }
+}
+
+/* ---- 抖音登录 ---- */
+async function loginQR(btn){
+  if(window.pywebview&&window.pywebview.api&&window.pywebview.api.login_qr){
+    const old=btn.textContent; btn.disabled=true; btn.textContent='请在弹出窗口里扫码…';
+    try{ const r=await window.pywebview.api.login_qr();
+      if(r&&r.ok){ toast('登录成功！现在可以拉更多作品了'); refresh(); }
+      else alert(r&&r.error||'登录未完成'); }
+    catch(e){ alert('登录失败：'+e); }
+    btn.disabled=false; btn.textContent=old;
+  }else{ alert('扫码登录需在桌面软件里用。或改用「粘贴 Cookie」/「从浏览器导入」。'); }
+}
+async function loginBrowser(btn){
+  const old=btn.textContent; btn.disabled=true; btn.textContent='读取中…';
+  try{ const r=await api('/api/login_browser','POST'); if(r.ok){ toast('已从'+(r.source||'浏览器')+'导入登录'); refresh(); } }
+  catch(e){ alert(e.message); }
+  btn.disabled=false; btn.textContent=old;
+}
+async function pasteCookie(){
+  const c=prompt('把在浏览器登录 douyin.com 后复制的 Cookie 整段粘进来（需包含 sessionid）：');
+  if(!c) return;
+  try{ await api('/api/set_cookie','POST',{cookie:c}); toast('登录成功！'); refresh(); }
+  catch(e){ alert(e.message); }
+}
+async function logout(){
+  if(!confirm('退出登录？退出后每个博主又只能看最新约20条。')) return;
+  await api('/api/logout','POST'); toast('已退出登录'); refresh();
+}
+
+async function chooseDir(btn){
+  const old=btn.textContent; btn.disabled=true; btn.textContent='选择中…';
+  try{
+    const d=await api('/api/choose_dir','POST');
+    if(d.ok){ document.getElementById('dlDirInput').value=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
+  }catch(e){ alert(e.message+'\n\n可直接在左边输入框粘贴路径后点「保存路径」'); }
+  btn.disabled=false; btn.textContent=old;
+}
+async function saveDir(btn){
+  const path=document.getElementById('dlDirInput').value.trim();
+  if(!path){ alert('先填写一个文件夹路径'); return; }
+  const old=btn.textContent; btn.disabled=true; btn.textContent='保存中…';
+  try{ const d=await api('/api/set_dir','POST',{path}); toast('已设置下载位置：'+d.download_dir); refresh(); }
+  catch(e){ alert(e.message); }
+  btn.disabled=false; btn.textContent=old;
+}
+function toast(msg){
+  let t=document.getElementById('__toast');
+  if(!t){ t=document.createElement('div'); t.id='__toast';
+    t.style.cssText='position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:var(--grad);color:#fff;padding:11px 20px;border-radius:10px;font-size:14px;box-shadow:0 6px 20px rgba(108,92,231,.4);z-index:99;transition:.3s';
+    document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity='1';
+  clearTimeout(window.__tt); window.__tt=setTimeout(()=>{t.style.opacity='0';},2600);
+}
+async function setIntervalVal(){
+  await api('/api/interval','POST',{minutes:parseInt(document.getElementById('intervalSel').value)});
+  refresh();
+}
+async function checkNow(btn){
+  btn.disabled=true;btn.textContent='检查中…';
+  await api('/api/check','POST');
+  setTimeout(()=>{btn.disabled=false;btn.textContent='🔄 立即检查';refresh();},5000);
+}
+document.getElementById('urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')addBlogger()});
+
+async function refresh(){ try{ render(await api('/api/status')); }catch(e){} }
+refresh();
+setInterval(refresh,10000);
+checkUpdate(false);   // 每次打开自动检查一次更新（静默）
+</script>
+</body>
+</html>

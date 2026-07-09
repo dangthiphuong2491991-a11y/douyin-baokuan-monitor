@@ -1,0 +1,15 @@
+# 绝不上传：含抖音登录 cookie / 密钥 / 个人配置
+data/
+# 下载的视频原片，太大且是个人内容
+downloads/
+# Python 缓存与打包产物
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec.bak
+# 本地编辑器/临时
+.claude/
+*.log
+.DS_Store
+Thumbs.db
