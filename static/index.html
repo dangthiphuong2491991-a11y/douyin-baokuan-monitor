@@ -368,10 +368,7 @@
     <div class="ptitle" id="dlgTitle" style="padding-right:18px"></div>
     <div id="dlgMsg" style="padding:2px 20px 8px;color:var(--sub);white-space:pre-wrap;line-height:1.7"></div>
     <div id="dlgInputWrap" style="padding:4px 20px 8px;display:none"><input id="dlgInput" style="width:100%"></div>
-    <div class="pfoot" style="justify-content:flex-end;padding:12px 18px 16px">
-      <button class="btn ghost" id="dlgCancel">取消</button>
-      <button class="btn" id="dlgOk">确定</button>
-    </div>
+    <div class="pfoot" id="dlgFoot" style="justify-content:flex-end;padding:12px 18px 16px;flex-wrap:wrap"></div>
   </div>
 </div>
 
@@ -388,21 +385,33 @@ function _dlg(o){
     const iw=document.getElementById('dlgInputWrap'), inp=document.getElementById('dlgInput');
     iw.style.display=o.input?'block':'none';
     if(o.input){ inp.value=o.def||''; inp.placeholder=o.placeholder||''; }
-    const ok=document.getElementById('dlgOk'), cc=document.getElementById('dlgCancel');
-    ok.textContent=o.okText||'确定'; cc.textContent=o.cancelText||'取消';
-    cc.style.display=o.showCancel?'inline-block':'none';
+    const foot=document.getElementById('dlgFoot'); foot.innerHTML='';
+    const done=v=>{ m.classList.remove('on'); m.onclick=inp.onkeydown=null; res(v); };
+    // 按钮：choices 优先；否则默认 取消/确定
+    let btns;
+    if(o.choices){ btns=o.choices.map(c=>({label:c.label, val:c.value, ghost:c.ghost})); }
+    else{
+      btns=[];
+      if(o.showCancel) btns.push({label:o.cancelText||'取消', val:(o.input?null:false), ghost:true});
+      btns.push({label:o.okText||'确定', val:(o.input?'__I__':true)});
+    }
+    btns.forEach(b=>{
+      const el=document.createElement('button');
+      el.className='btn'+(b.ghost?' ghost':'');
+      el.textContent=b.label;
+      el.onclick=()=>done(b.val==='__I__'?inp.value:b.val);
+      foot.appendChild(el);
+    });
     m.classList.add('on');
     if(o.input) setTimeout(()=>inp.focus(),60);
-    const done=v=>{ m.classList.remove('on'); ok.onclick=cc.onclick=m.onclick=inp.onkeydown=null; res(v); };
-    ok.onclick=()=>done(o.input?inp.value:true);
-    cc.onclick=()=>done(o.input?null:false);
-    m.onclick=e=>{ if(e.target===m) done(o.input?null:false); };
+    m.onclick=e=>{ if(e.target===m) done(o.input?null:(o.choices?null:false)); };
     inp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();done(o.input?inp.value:true);} if(e.key==='Escape')done(o.input?null:false); };
   });
 }
 function uiAlert(msg,title){ return _dlg({title:title||'提示',msg:String(msg),showCancel:false,okText:'知道了'}); }
 function uiConfirm(msg,title){ return _dlg({title:title||'确认',msg:String(msg),showCancel:true}); }
 function uiPrompt(msg,opt){ opt=opt||{}; return _dlg({title:opt.title||'输入',msg:String(msg),input:true,def:opt.def,placeholder:opt.placeholder,showCancel:true}); }
+function uiChoose(msg,title,choices){ return _dlg({title:title||'请选择',msg:String(msg),choices}); }
 
 async function api(url, method='GET', body){
   const r = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
@@ -542,8 +551,8 @@ function togglePost(aid){
 }
 
 function updateBar(){
-  document.getElementById('selCount').textContent=selectedIds.size;
-  document.getElementById('dlSelBtn').disabled=selectedIds.size===0;
+  const c=document.getElementById('selCount'); if(c) c.textContent=selectedIds.size;
+  const b=document.getElementById('dlSelBtn'); if(b) b.disabled=selectedIds.size===0;
 }
 
 function selectAll(){
@@ -661,8 +670,8 @@ function toggleDisc(aid){
   updateDiscBar();
 }
 function updateDiscBar(){
-  document.getElementById('discSelCount').textContent=discSel.size;
-  document.getElementById('dlDiscBtn').disabled=discSel.size===0;
+  const c=document.getElementById('discSelCount'); if(c) c.textContent=discSel.size;
+  const b=document.getElementById('dlDiscBtn'); if(b) b.disabled=discSel.size===0;
 }
 function selectAllDisc(){
   const undone=discItems.filter(p=>!p.downloaded);
@@ -674,26 +683,57 @@ async function downloadDisc(btn){
   if(!discSel.size) return;
   if(!await ensureDownloadDir()) return;
   const ids=[...discSel], old=btn.innerHTML;
-  btn.disabled=true; btn.textContent=`下载中 ${ids.length} 个…`;
   try{
-    let success=0,total=0;
-    if(discSrc==='related'){
-      const d=await api('/api/download_selected','POST',{sec_user_id:'discover',aweme_ids:ids});
-      success=d.success; total=d.total;
-    }else{
-      // 库内结果按博主分组下载（各归各的文件夹）
-      const groups={};
-      discItems.filter(p=>ids.includes(p.aweme_id)).forEach(p=>{(groups[p.sec_user_id]=groups[p.sec_user_id]||[]).push(p.aweme_id)});
-      for(const sec in groups){
-        const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:groups[sec]});
-        success+=d.success; total+=d.total;
-      }
+    // 先查选中的视频有没有属于合集的
+    btn.disabled=true; btn.textContent='检查合集…';
+    const mixChecks=await Promise.all(ids.map(id=>api('/api/mix_info/'+id).catch(()=>({in_mix:false}))));
+    const mixes={};   // mix_id -> 用来触发下载的一个 aweme_id
+    ids.forEach((id,i)=>{ const m=mixChecks[i]; if(m&&m.in_mix){ mixes[m.mix_id]=mixes[m.mix_id]||{aid:id,name:m.mix_name}; } });
+    const mixCount=Object.keys(mixes).length;
+
+    let mode='single';
+    if(mixCount){
+      mode=await uiChoose(`选中的视频里有 ${mixCount} 个属于合集。要下载整个合集，还是只下选中这几条？`,'下载',[
+        {label:'⬇ 下载整个合集',value:'mix'},
+        {label:'只下选中这几条',value:'single'},
+        {label:'取消',value:null,ghost:true},
+      ]);
+      if(!mode){ btn.innerHTML=old; btn.disabled=false; return; }
     }
-    btn.textContent=`✓ 成功 ${success}/${total}`;
+
+    if(mode==='mix'){
+      btn.textContent='开始下载合集…';
+      for(const mid in mixes){ await api('/api/download_mix','POST',{aweme_id:mixes[mid].aid}); }
+      // 不属于合集的选中项，仍按单条下
+      const singleIds=ids.filter((id,i)=>!(mixChecks[i]&&mixChecks[i].in_mix));
+      if(singleIds.length) await downloadSingles(singleIds);
+      btn.textContent=`✓ 已开始下载 ${mixCount} 个合集`;
+      toast(`已开始下载 ${mixCount} 个合集，下载库里陆续出现`);
+    }else{
+      btn.textContent=`下载中 ${ids.length} 个…`;
+      const r=await downloadSingles(ids);
+      btn.textContent=`✓ 成功 ${r.success}/${r.total}`;
+    }
     discItems.forEach(p=>{ if(ids.includes(p.aweme_id)) p.downloaded=true; });
     discSel.clear(); renderDisc();
     setTimeout(()=>{btn.innerHTML=old;updateDiscBar();},2200);
   }catch(e){ uiAlert(e.message); btn.innerHTML=old; btn.disabled=false; }
+}
+// 单条下载（相关推荐用 discover 缓存；库内按博主分组）
+async function downloadSingles(ids){
+  let success=0,total=0;
+  if(discSrc==='related'){
+    const d=await api('/api/download_selected','POST',{sec_user_id:'discover',aweme_ids:ids});
+    success+=d.success; total+=d.total;
+  }else{
+    const groups={};
+    discItems.filter(p=>ids.includes(p.aweme_id)).forEach(p=>{(groups[p.sec_user_id]=groups[p.sec_user_id]||[]).push(p.aweme_id)});
+    for(const sec in groups){
+      const d=await api('/api/download_selected','POST',{sec_user_id:sec,aweme_ids:groups[sec]});
+      success+=d.success; total+=d.total;
+    }
+  }
+  return {success,total};
 }
 
 /* ---- 更新动态：按博主分类 + 下钻明细 ---- */
@@ -866,6 +906,13 @@ async function exportBloggers(){
   try{
     const d=await api('/api/export_bloggers');
     if(!d.bloggers.length){ uiAlert('库里还没有博主，先添加几个再导出'); return; }
+    // 桌面版：弹原生「保存到…」对话框，自己选位置
+    try{
+      const r=await api('/api/export_bloggers_file','POST');
+      if(r&&r.ok){ toast(`已导出 ${r.count} 个博主到：${r.path}`); return; }
+      if(r&&r.cancelled) return;
+    }catch(e){ /* 非桌面：走下面浏览器下载 */ }
+    // 浏览器兜底：Blob 下载
     const blob=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
@@ -882,8 +929,15 @@ function importBloggers(){
     let data; try{ data=JSON.parse(await f.text()); }catch(e){ uiAlert('文件解析失败，不是有效的 JSON'); return; }
     const bloggers=Array.isArray(data)?data:(data.bloggers||[]);
     if(!bloggers.length){ uiAlert('文件里没有博主数据'); return; }
-    try{ const r=await api('/api/import_bloggers','POST',{bloggers});
-      toast(`导入成功：新增 ${r.added} 个（现共 ${r.total} 个）`); refresh(); }
+    const mode=await uiChoose(`文件里有 ${bloggers.length} 个博主。要怎么导入？`,'导入博主',[
+      {label:'➕ 追加到现有',value:'append'},
+      {label:'♻ 替换现有',value:'replace'},
+      {label:'取消',value:null,ghost:true},
+    ]);
+    if(!mode) return;
+    if(mode==='replace' && !await uiConfirm('替换会清空当前库里的博主，用文件里的替代。确定？','确认替换')) return;
+    try{ const r=await api('/api/import_bloggers','POST',{bloggers,mode});
+      toast(mode==='replace'?`已替换，现共 ${r.total} 个博主`:`已追加，新增 ${r.added} 个（现共 ${r.total} 个）`); refresh(); }
     catch(e){ uiAlert(e.message); }
   };
   inp.click();

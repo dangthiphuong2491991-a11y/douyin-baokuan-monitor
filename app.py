@@ -169,7 +169,7 @@ async def fetch_posts_raw(sec_uid: str, max_count: int = 20) -> list:
     """抓取博主作品（可多页累积），返回 aweme 原始 dict 列表"""
     kw = make_kwargs()
     if max_count > 20:
-        kw["timeout"] = 10  # f2 用 timeout 值当翻页间隔，多页时调短些（兼顾请求超时）
+        kw["timeout"] = 8  # f2 用 timeout 值当翻页间隔，多页时调短些（兼顾请求超时）
     h = DouyinHandler(kw)
     out = []
     async for posts in h.fetch_user_post_videos(
@@ -179,6 +179,29 @@ async def fetch_posts_raw(sec_uid: str, max_count: int = 20) -> list:
         if len(out) >= max_count:
             break
     return out[:max_count]
+
+
+async def fetch_posts_windowed(sec_uid: str, hours: int, max_pages: int = 8) -> list:
+    """按时间窗抓：一页里最新的都超出时间范围就停（作品按时间倒序，够准又不浪费翻页）。"""
+    kw = make_kwargs()
+    kw["timeout"] = 5  # f2 用它当翻页间隔；稳妥值，别太快免得被风控（抓不全）
+    h = DouyinHandler(kw)
+    cutoff = time.time() - hours * 3600 if hours else 0
+    out = []
+    pages = 0
+    async for posts in h.fetch_user_post_videos(
+        sec_user_id=sec_uid, page_counts=20, max_counts=max_pages * 20
+    ):
+        page = posts._to_raw().get("aweme_list") or []
+        out.extend(page)
+        pages += 1
+        if cutoff and page:
+            newest = max((a.get("create_time") or 0) for a in page)
+            if newest < cutoff:   # 整页都比截止时间早 → 后面更早，停
+                break
+        if pages >= max_pages:
+            break
+    return out
 
 
 async def fetch_profile(sec_uid: str) -> dict:
@@ -854,33 +877,38 @@ class LibrarySearchBody(BaseModel):
 
 @app.post("/api/library_search")
 async def api_library_search(body: LibrarySearchBody):
-    """库里博主：时间窗内的作品，按点赞从高到低排，取前 N（点赞是排序键，不是门槛）"""
+    """库里博主：时间窗内的作品，按点赞从高到低排，取前 N。
+    提速：14 个博主并发抓 + 按时间窗智能停页（够准又快）。"""
     now = time.time()
-    items = []
-    tag_cache = {}
-    for b in list(config["bloggers"]):
+    bloggers = list(config["bloggers"])
+    hours = body.hours
+    sem = asyncio.Semaphore(4)   # 并发上限压低：登录账号并发太多易被判机器人→封号
+
+    async def one(b):
         sec_uid = b["sec_user_id"]
         nickname = b.get("nickname") or sec_uid[:16]
-        # 登录后可翻页拿更多作品，才排得出真正的前N；未登录抖音最多给约20条
-        scan = max(body.scan, 150) if is_logged_in() else 20
-        try:
-            awemes = await fetch_posts_raw(sec_uid, max_count=scan)
-        except Exception as e:
-            log_err(f"库内查找 {nickname} 失败: {e}")
-            continue
+        async with sem:
+            try:
+                if hours:   # 有时间窗：抓到超出范围就停
+                    awemes = await fetch_posts_windowed(sec_uid, hours, max_pages=8)
+                else:       # 不限时间：抓最新一页够排序
+                    awemes = await fetch_posts_raw(sec_uid, max_count=20)
+            except Exception as e:
+                log_err(f"库内查找 {nickname} 失败: {e}")
+                return []
         cache = POSTS_CACHE.setdefault(sec_uid, {})
-        if nickname not in tag_cache:
-            tag_cache[nickname] = _downloaded_tags(nickname)
+        tags = _downloaded_tags(nickname)
+        out = []
         for a in awemes:
             ct = a.get("create_time") or 0
             age_h = (now - ct) / 3600 if ct else 1e9
-            digg = (a.get("statistics") or {}).get("digg_count") or 0
-            if body.hours and age_h > body.hours:   # 只卡时间；点赞不过滤，只用于排序
+            if hours and age_h > hours:
                 continue
+            digg = (a.get("statistics") or {}).get("digg_count") or 0
             aid = str(a.get("aweme_id"))
             cache[aid] = a
             dur = (a.get("video") or {}).get("duration") or 0
-            items.append({
+            out.append({
                 "aweme_id": aid,
                 "desc": (a.get("desc") or "").strip() or "(无标题)",
                 "author": nickname,
@@ -891,14 +919,17 @@ async def api_library_search(body: LibrarySearchBody):
                 "create_time": fmt_ts(ct),
                 "age_hours": round(age_h, 1),
                 "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
-                "downloaded": aid[-6:] in tag_cache[nickname],
+                "downloaded": aid[-6:] in tags,
                 "is_monitored": True,
             })
-        await asyncio.sleep(1)
+        return out
+
+    results = await asyncio.gather(*[one(b) for b in bloggers])
+    items = [it for sub in results for it in sub]
     items.sort(key=lambda x: x["digg"], reverse=True)
     total = len(items)
-    items = items[:50]   # 按点赞取前 50（够看前30，还有余）
-    return {"bloggers": len(config["bloggers"]), "hours": body.hours,
+    items = items[:30]
+    return {"bloggers": len(bloggers), "hours": hours,
             "total": total, "count": len(items), "items": items}
 
 
@@ -1045,13 +1076,41 @@ def api_export_bloggers():
     }
 
 
+@app.post("/api/export_bloggers_file")
+def api_export_bloggers_file():
+    """弹原生保存对话框，让用户选位置保存导出文件（仅桌面版）"""
+    try:
+        import webview
+        win = webview.active_window() or (webview.windows[0] if webview.windows else None)
+        if not win:
+            raise RuntimeError("no window")
+        res = win.create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=f"监控博主_{datetime.now().strftime('%Y%m%d')}.json",
+            file_types=("JSON 文件 (*.json)", "所有文件 (*.*)"),
+        )
+        if not res:
+            return {"ok": False, "cancelled": True}
+        path = res if isinstance(res, str) else res[0]
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        data = api_export_bloggers()
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        return {"ok": True, "path": path, "count": len(data["bloggers"])}
+    except Exception as e:
+        return JSONResponse({"error": f"保存对话框不可用（可能非桌面模式）：{e}"}, status_code=400)
+
+
 class ImportBody(BaseModel):
     bloggers: list = []
+    mode: str = "append"   # append=追加  replace=替换现有
 
 
 @app.post("/api/import_bloggers")
 def api_import_bloggers(body: ImportBody):
     keys = ("sec_user_id", "nickname", "avatar", "follower_count", "aweme_count", "signature")
+    if body.mode == "replace":
+        config["bloggers"] = []
     existing = {b["sec_user_id"] for b in config["bloggers"]}
     added = 0
     for b in body.bloggers or []:
@@ -1059,13 +1118,14 @@ def api_import_bloggers(body: ImportBody):
         if not sid or not str(sid).startswith("MS4wLjAB") or sid in existing:
             continue
         rec = {k: b.get(k) for k in keys}
+        rec["notify"] = True
         rec["added_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         config["bloggers"].append(rec)
         existing.add(sid)
         added += 1
-    if added:
+    if added or body.mode == "replace":
         _save(CONFIG_FILE, config)
-    return {"ok": True, "added": added, "total": len(config["bloggers"])}
+    return {"ok": True, "added": added, "total": len(config["bloggers"]), "mode": body.mode}
 
 
 @app.get("/api/check_update")
