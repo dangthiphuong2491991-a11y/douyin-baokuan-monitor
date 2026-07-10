@@ -1743,6 +1743,41 @@ def api_channels_upload(body: UploadBody):
     return {"ok": True, "queued": len(plan), "accounts": len(targets)}
 
 
+class PubDraftBody(BaseModel):
+    name: str = ""
+    data: dict = {}          # 前端整包配置（选的视频/账号/分发设置/文案）
+
+
+@app.get("/api/channels/pubdrafts")
+def api_ch_pubdrafts():
+    return {"drafts": [{"name": d.get("name"), "at": d.get("at"), "count": len((d.get("data") or {}).get("items", []))}
+                       for d in config.get("ch_pub_drafts", [])]}
+
+
+@app.post("/api/channels/pubdrafts/save")
+def api_ch_pubdraft_save(body: PubDraftBody):
+    name = body.name.strip() or datetime.now().strftime("草稿_%m%d_%H%M")
+    dl = config.setdefault("ch_pub_drafts", [])
+    dl[:] = [d for d in dl if d.get("name") != name]
+    dl.insert(0, {"name": name, "at": datetime.now().strftime("%m-%d %H:%M"), "data": body.data})
+    config["ch_pub_drafts"] = dl[:30]
+    _save(CONFIG_FILE, config)
+    return {"ok": True, "name": name}
+
+
+@app.get("/api/channels/pubdrafts/{name}")
+def api_ch_pubdraft_load(name: str):
+    d = next((x for x in config.get("ch_pub_drafts", []) if x.get("name") == name), None)
+    return {"data": (d or {}).get("data", {})} if d else JSONResponse({"error": "草稿不存在"}, status_code=404)
+
+
+@app.delete("/api/channels/pubdrafts/{name}")
+def api_ch_pubdraft_del(name: str):
+    config["ch_pub_drafts"] = [x for x in config.get("ch_pub_drafts", []) if x.get("name") != name]
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
+
+
 @app.post("/api/channels/tasks/retry_failed")
 def api_channels_retry():
     n = 0
