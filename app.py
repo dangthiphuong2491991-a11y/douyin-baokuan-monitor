@@ -294,14 +294,20 @@ async def process_new_aweme(blogger: dict, aweme: dict):
            icon=cover_path if rec["cover"] else None)
 
 
-async def download_aweme_media(nickname: str, aweme: dict, platform: str = "douyin") -> tuple:
-    """手动下载单个作品（视频或图集）到 downloads/平台/昵称/。返回 (ok, 文件url)"""
+async def download_aweme_media(nickname: str, aweme: dict, platform: str = "douyin",
+                               subdir: str = "", ep_no=None) -> tuple:
+    """下载单个作品（视频或图集）。subdir=合集名(进子文件夹) ; ep_no=集数(文件名直接叫 1,2,3)。返回 (ok, 文件url)"""
     it = get_adapter(platform).normalize(aweme)
     aid = it["aweme_id"]
     dl = get_dl()
     folder = platform_dir(platform) / sanitize(nickname, 30)
-    date_tag = datetime.fromtimestamp(int(it.get("create_time") or time.time())).strftime("%Y%m%d")
-    stem = f"{date_tag}_{sanitize(it['desc'], 40)}_{aid[-6:]}"
+    if subdir:
+        folder = folder / sanitize(subdir, 40)
+    if ep_no is not None:
+        stem = str(int(ep_no))     # 合集：干净的集数命名 1 / 2 / 3
+    else:
+        date_tag = datetime.fromtimestamp(int(it.get("create_time") or time.time())).strftime("%Y%m%d")
+        stem = f"{date_tag}_{sanitize(it['desc'], 40)}_{aid[-6:]}"
 
     if it["cover"]:
         await download_file(it["cover"], folder / f"{stem}.jpg")
@@ -330,6 +336,18 @@ def _downloaded_tags(nickname: str, platform: str = "douyin") -> set:
             if m:
                 tags.add(m.group(1))
     return tags
+
+
+def _mix_episodes_done(nickname: str, mix_name: str, platform: str = "douyin") -> set:
+    """某合集子文件夹里已下载的集数集合（文件名形如 1.mp4）—— 用于合集追更的"只下缺集"。"""
+    folder = platform_dir(platform) / sanitize(nickname, 30) / sanitize(mix_name, 40)
+    done = set()
+    if folder.exists():
+        for f in folder.iterdir():
+            m = re.fullmatch(r"(\d+)\.mp4", f.name)
+            if m:
+                done.add(int(m.group(1)))
+    return done
 
 
 def _blogger(sec_uid: str) -> dict:
@@ -805,13 +823,13 @@ DL_QUEUE: asyncio.Queue = asyncio.Queue()
 _task_seq = 0
 
 
-def enqueue_download(platform, nickname, aid, desc="", kind="单条", mix_id=None, mix_name=""):
+def enqueue_download(platform, nickname, aid, desc="", kind="单条", mix_id=None, mix_name="", ep_no=None):
     global _task_seq
     _task_seq += 1
     tid = f"t{_task_seq}"
     DL_TASKS[tid] = {"id": tid, "platform": platform, "nickname": nickname or "",
                      "aweme_id": str(aid), "desc": (desc or "")[:60], "kind": kind,
-                     "mix_id": mix_id, "mix_name": mix_name,
+                     "mix_id": mix_id, "mix_name": mix_name, "ep_no": ep_no,
                      "status": "queued", "err": "", "ts": datetime.now().strftime("%H:%M:%S")}
     DL_QUEUE.put_nowait(tid)
     return tid
@@ -831,7 +849,12 @@ async def _dl_worker():
             if aweme:
                 nm = t["nickname"] or get_adapter(platform).normalize(aweme).get("author_name") or "未知博主"
                 t["nickname"] = nm
-                ok, _u = await download_aweme_media(nm, aweme, platform)
+                if t.get("mix_name"):   # 合集集：进《合集名》子文件夹，文件名直接叫集数
+                    ep = t.get("ep_no") or get_adapter(platform).normalize(aweme).get("episode")
+                    ok, _u = await download_aweme_media(nm, aweme, platform,
+                                                        subdir=t["mix_name"], ep_no=ep)
+                else:
+                    ok, _u = await download_aweme_media(nm, aweme, platform)
                 t["status"] = "done" if ok else "failed"
                 if not ok:
                     t["err"] = "没拿到下载地址或写文件失败"
@@ -950,25 +973,28 @@ async def _download_mix_bg(mix_id, mix_name, nickname, total_hint, platform="dou
     if not episodes:
         MIX_PROGRESS.pop(mix_id, None)
         return
-    done_tags = _downloaded_tags(nickname, platform)
+    m0 = ad.normalize(episodes[0])                # 用真实合集名当子文件夹名
+    mix_name = (m0.get("mix") or {}).get("mix_name") or mix_name
+    MIX_PROGRESS[mix_id]["name"] = mix_name
+    done_eps = _mix_episodes_done(nickname, mix_name, platform)   # 该合集已下到哪几集
     stash = POSTS_CACHE.setdefault("_mix", {})   # 暂存完整数据，worker 下载时免重拉详情
     new_eps = []
-    for ep in episodes:
+    for i, ep in enumerate(episodes):
         it = ad.normalize(ep)
         stash[it["aweme_id"]] = ep
-        if it["aweme_id"][-6:] in done_tags:
-            continue                              # 本地已有的集跳过 → 补齐只下新集
-        new_eps.append((it["aweme_id"], it["desc"]))
-    _upsert_mix_follow(mix_id, mix_name, nickname, platform, len(episodes),
-                       sample_aid=ad.normalize(episodes[0])["aweme_id"])
+        ep_no = it.get("episode") or (i + 1)     # 真实集数，拿不到就用列表位置兜底
+        if ep_no in done_eps:
+            continue                              # 已有的集跳过 → 补齐只下缺集
+        new_eps.append((it["aweme_id"], it["desc"], ep_no))
+    _upsert_mix_follow(mix_id, mix_name, nickname, platform, len(episodes), sample_aid=m0["aweme_id"])
     if not new_eps:
         MIX_PROGRESS.pop(mix_id, None)
         print(f"[MIX] 《{mix_name}》没有新集要下（本地已齐 {len(episodes)} 集）", flush=True)
         return
     MIX_PROGRESS[mix_id]["total"] = len(new_eps)
-    for aid, desc in new_eps:
+    for aid, desc, ep_no in new_eps:
         enqueue_download(platform, nickname, aid, desc,
-                         kind=f"合集《{mix_name}》", mix_id=mix_id, mix_name=mix_name)
+                         kind=f"合集《{mix_name}》第{ep_no}集", mix_id=mix_id, mix_name=mix_name, ep_no=ep_no)
     print(f"[MIX] 《{mix_name}》{len(new_eps)} 集已进下载队列（云端共 {len(episodes)} 集）", flush=True)
 
 
@@ -1032,6 +1058,8 @@ def api_mix_follows(platform: str = ""):
             continue
         d = dict(f)
         d["new_count"] = max(0, (f.get("cloud_total") or 0) - (f.get("known_total") or 0))
+        d["local_have"] = len(_mix_episodes_done(f.get("nickname", ""), f.get("mix_name", ""),
+                                                 f.get("platform", "douyin")))
         out.append(d)
     return {"follows": out}
 
@@ -1239,21 +1267,35 @@ def api_downloads(platform: str = "douyin"):
     groups = []
     base = get_dl()
     root = platform_dir(platform)
+
+    def _ep_key(f: Path):
+        m = re.match(r"(\d+)", f.stem)
+        return (int(m.group(1)) if m else 10 ** 9, f.name)
+
+    def collect(folder: Path, label: str, is_mix: bool):
+        files, subs = [], []
+        for f in folder.iterdir():
+            if f.is_dir():
+                subs.append(f)
+            elif f.is_file() and not f.name.endswith(".part"):
+                files.append(f)
+        files.sort(key=_ep_key) if is_mix else \
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)   # 合集按集数，其余按时间
+        items = [{"name": f.name, "url": f"/files/{f.relative_to(base).as_posix()}",
+                  "size": round(f.stat().st_size / 1024 / 1024, 2),
+                  "is_video": f.suffix.lower() == ".mp4"} for f in files]
+        if items:
+            groups.append({"blogger": label, "count": len(items), "files": items, "is_mix": is_mix,
+                           "rel": folder.relative_to(root).as_posix()})
+        return subs
+
     if root.exists():
         for d in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if not d.is_dir():
                 continue
-            files = []
-            for f in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-                if f.is_file() and not f.name.endswith(".part"):
-                    files.append({
-                        "name": f.name,
-                        "url": f"/files/{f.relative_to(base).as_posix()}",
-                        "size": round(f.stat().st_size / 1024 / 1024, 2),
-                        "is_video": f.suffix.lower() == ".mp4",
-                    })
-            if files:
-                groups.append({"blogger": d.name, "count": len(files), "files": files})
+            subs = collect(d, d.name, False)                       # 博主直属单条
+            for sd in sorted(subs, key=lambda p: p.stat().st_mtime, reverse=True):
+                collect(sd, f"{d.name} › {sd.name}", True)         # 合集子文件夹，按集数排
     return {"groups": groups}
 
 
@@ -1264,8 +1306,13 @@ def api_reveal():
 
 
 @app.post("/api/reveal_blogger/{name}")
-def api_reveal_blogger(name: str, platform: str = "douyin"):
+def api_reveal_blogger(name: str, platform: str = "douyin", rel: str = ""):
     root = platform_dir(platform)
+    if rel:   # 合集子文件夹用相对路径打开（带越界保护）
+        target = (root / rel).resolve()
+        if target.is_dir() and str(target).startswith(str(root.resolve())):
+            os.startfile(str(target))
+            return {"ok": True}
     target = root / sanitize(name, 30)
     os.startfile(str(target if target.exists() else root))
     return {"ok": True}

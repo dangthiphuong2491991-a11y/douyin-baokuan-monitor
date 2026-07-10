@@ -221,8 +221,10 @@ class DouyinAdapter(BaseAdapter):
                 imgs.append(urls[-1])
         mi = a.get("mix_info") or {}
         mix = None
+        episode = None
         if mi.get("mix_id"):
             st = mi.get("statis") or {}
+            episode = st.get("current_episode")   # 真实集数（付费/隐藏集被跳过也不错位）
             mix = {"mix_id": mi["mix_id"], "mix_name": mi.get("mix_name") or "合集",
                    "total": st.get("updated_to_episode") or st.get("total_episode") or 0}
         author = a.get("author") or {}
@@ -236,7 +238,7 @@ class DouyinAdapter(BaseAdapter):
             "share": stats.get("share_count", 0), "collect": stats.get("collect_count", 0),
             "duration_ms": video.get("duration") or 0,
             "is_images": bool(a.get("images")),
-            "cover": cover or "", "video_url": vurl, "image_urls": imgs, "mix": mix,
+            "cover": cover or "", "video_url": vurl, "image_urls": imgs, "mix": mix, "episode": episode,
             "web_url": f"https://www.douyin.com/video/{aid}", "raw": a,
         }
 
@@ -362,7 +364,7 @@ class TiktokAdapter(BaseAdapter):
             "share": _num(stats.get("shareCount")), "collect": _num(stats.get("collectCount")),
             "duration_ms": _num(video.get("duration")) * 1000,   # TikTok 是秒
             "is_images": bool(img_post.get("images")),
-            "cover": cover, "video_url": vurl, "image_urls": imgs, "mix": None,
+            "cover": cover, "video_url": vurl, "image_urls": imgs, "mix": None, "episode": None,
             "web_url": f"https://www.tiktok.com/@{author.get('uniqueId','')}/video/{aid}", "raw": a,
         }
 

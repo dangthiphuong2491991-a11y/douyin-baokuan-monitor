@@ -610,13 +610,21 @@ function render(st){
 
 function emptyBox(icon,t,d){return `<div class="empty" style="grid-column:1/-1"><div class="big">${icon}</div><div style="font-size:16px;color:var(--txt)">${t}</div><div style="margin-top:5px">${d}</div></div>`}
 
+function dlLabel(f, isMix){
+  if(isMix){ const m=(f.name||'').match(/^(\d+)\./); if(m) return '第'+m[1]+'集'; }
+  return (f.name||'').replace(/\.[^.]+$/,'');
+}
+function revealFolder(name, rel){
+  api('/api/reveal_blogger/'+encodeURIComponent(name)+'?platform='+PLATFORM+(rel?'&rel='+encodeURIComponent(rel):''),'POST');
+}
+
 function followRow(f){
   const nu=f.new_count||0;
   return `<div class="card" style="padding:12px 16px;display:flex;gap:10px;align-items:center;margin-bottom:8px${nu>0?';border-color:rgba(254,77,106,.5)':''}">
     <div style="flex:1;min-width:0">
       <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📺 《${esc(f.mix_name)}》
         ${nu>0?`<span class="tag fail">+${nu} 新集</span>`:'<span class="tag ok">已最新</span>'}</div>
-      <div style="color:var(--sub);font-size:12px">@${esc(f.nickname)} · 云端 ${f.cloud_total||'?'} 集 · 本地已下到 ${f.known_total||'?'} 集 · 上次检查 ${esc(f.last_check||'—')}</div>
+      <div style="color:var(--sub);font-size:12px">@${esc(f.nickname)} · 云端 ${f.cloud_total||'?'} 集 · 本地已存 ${f.local_have??'?'} 集 · 上次检查 ${esc(f.last_check||'—')}</div>
     </div>
     ${nu>0?`<button class="btn" onclick="pullMix('${esc(f.mix_id)}')">⬇ 补齐 ${nu} 集</button>`:''}
     <button class="btn ghost" style="padding:8px 12px" onclick="checkMixFollow('${esc(f.mix_id)}',this)">检查更新</button>
@@ -669,14 +677,14 @@ async function loadLib(){
     document.getElementById('stFiles').textContent = total;
     box.innerHTML = groups.length ? groups.map(g=>`
       <div class="dlgrp">
-        <div class="h"><span class="nm">📁 ${esc(g.blogger)}</span><span class="c">${g.count} 个文件</span>
-          <button class="btn ghost" style="margin-left:auto;padding:6px 12px" onclick="api('/api/reveal_blogger/'+encodeURIComponent('${esc(g.blogger)}')+'?platform='+PLATFORM,'POST')">打开文件夹</button></div>
+        <div class="h"><span class="nm">${g.is_mix?'📺':'📁'} ${esc(g.blogger)}</span><span class="c">${g.count} ${g.is_mix?'集':'个文件'}</span>
+          <button class="btn ghost" style="margin-left:auto;padding:6px 12px" onclick='revealFolder(${JSON.stringify(g.blogger)},${JSON.stringify(g.rel||"")})'>打开文件夹</button></div>
         <div class="grid">${g.files.map(f=>`
-          <div class="dl" onclick="${f.is_video?`openPlayer('','视频','${esc(f.name).replace(/'/g,"\\'")}','${esc(f.url)}')`:`window.open('${esc(f.url)}')`}">
+          <div class="dl" onclick="${f.is_video?`openPlayer('','${esc(dlLabel(f,g.is_mix))}','${esc(dlLabel(f,g.is_mix)).replace(/'/g,"\\'")}','${esc(f.url)}')`:`window.open('${esc(f.url)}')`}">
             ${f.is_video
-              ? `<div class="thumb" style="display:grid;place-items:center;font-size:34px;position:relative">🎬<span class="playbtn" style="font-size:14px">▶</span></div>`
+              ? `<div class="thumb" style="display:grid;place-items:center;position:relative">${g.is_mix?`<span style="font-size:22px;font-weight:800;color:var(--acc2)">${esc(dlLabel(f,true))}</span>`:'<span style="font-size:34px">🎬</span>'}<span class="playbtn" style="font-size:14px">▶</span></div>`
               : `<img class="thumb" src="${esc(f.url)}">`}
-            <div class="cap">${f.is_video?'▶ ':''}<b>${f.size}</b> MB</div>
+            <div class="cap">${f.is_video?'▶ ':''}${g.is_mix?esc(dlLabel(f,true))+' · ':''}<b>${f.size}</b> MB</div>
           </div>`).join('')}</div>
       </div>`).join('') : emptyBox('📦','下载库还是空的','发现新作品后会自动下载到这里');
   }catch(e){ box.innerHTML = emptyBox('⚠','加载失败',e.message) }
