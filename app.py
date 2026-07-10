@@ -72,6 +72,10 @@ config = _load(CONFIG_FILE, {"interval_minutes": 5, "bloggers": []})
 state = _load(STATE_FILE, {"seen": {}, "updates": [], "last_check": None, "errors": []})
 POSTS_CACHE = {}  # sec_uid -> {aweme_id: 完整 aweme dict}，供手动下载取新鲜地址
 
+# 点赞数据快照（起飞预警/日报用）：aweme_id -> {desc,nickname,platform,create_time,alerted,pts:[[ts,digg]]}
+SNAPS_FILE = DATA / "snaps.json"
+SNAPS = _load(SNAPS_FILE, {})
+
 
 def _migrate_config():
     """老配置迁移到多平台结构：cookie→cookies.douyin；博主补 platform=douyin"""
@@ -85,6 +89,10 @@ def _migrate_config():
     for b in config.get("bloggers", []):
         if "platform" not in b:
             b["platform"] = "douyin"
+            changed = True
+    for k, v in (("mix_follows", []), ("takeoff_vel", 3000), ("digest_hour", 9)):
+        if k not in config:
+            config[k] = v
             changed = True
     if changed:
         _save(CONFIG_FILE, config)
@@ -357,6 +365,114 @@ async def resolve_aweme(aid: str, platform: str = "douyin") -> dict:
     return None
 
 
+# ---------------- 数据快照 + 起飞预警 + 每日日报 ----------------
+SNAP_MAX_AGE_DAYS = 7      # 只追踪发布 7 天内的新作品（老作品数据已稳定，不是起飞候选）
+
+
+def _maybe_takeoff(aid: str, s: dict):
+    """看最近 2 小时窗口的涨赞速度，超阈值就预警（每条作品只报一次）"""
+    vel_min = int(config.get("takeoff_vel") or 0)
+    if vel_min <= 0 or s.get("alerted"):
+        return
+    pts = s["pts"]
+    now_ts, now_digg = pts[-1]
+    base = None
+    for ts, dg in pts:                       # 找 2 小时窗口内最早的点
+        if now_ts - ts <= 2 * 3600:
+            base = (ts, dg)
+            break
+    if not base or now_ts - base[0] < 1800:  # 窗口至少跨半小时才能算速度
+        return
+    dt_h = (now_ts - base[0]) / 3600
+    gained = now_digg - base[1]
+    vel = gained / dt_h
+    if vel >= vel_min and gained >= vel_min / 2:
+        s["alerted"] = True
+        ev = {"aweme_id": aid, "desc": s["desc"], "nickname": s["nickname"], "platform": s["platform"],
+              "gained": int(gained), "hours": round(dt_h, 1), "vel": int(vel), "digg": int(now_digg),
+              "time": datetime.now().strftime("%m-%d %H:%M"), "pts": pts[-48:]}
+        state.setdefault("takeoffs", []).insert(0, ev)
+        state["takeoffs"] = state["takeoffs"][:50]
+        _save(STATE_FILE, state)
+        notify(f"🚀 起飞预警：@{s['nickname']}",
+               f"{s['desc']}\n{ev['hours']}小时涨了 {gained:,} 赞（{int(vel):,} 赞/时），当前 {now_digg:,} 赞")
+
+
+def _record_snapshots(blogger: dict, its: list):
+    """监控循环顺手记每条新作品的 (时间, 点赞) 序列，供起飞预警/日报用"""
+    now = time.time()
+    changed = False
+    for it in its:
+        ct = it.get("create_time") or 0
+        if not ct or now - ct > SNAP_MAX_AGE_DAYS * 86400:
+            continue
+        aid = it["aweme_id"]
+        s = SNAPS.get(aid)
+        if s is None:
+            s = SNAPS[aid] = {"desc": (it["desc"] or "")[:60] or "(无标题)",
+                              "nickname": blogger.get("nickname", ""), "platform": it["platform"],
+                              "create_time": ct, "alerted": False, "pts": []}
+        pts = s["pts"]
+        if pts and now - pts[-1][0] < 600:   # 10 分钟内不重复记点
+            continue
+        pts.append([int(now), int(it.get("digg") or 0)])
+        if len(pts) > 500:
+            del pts[:len(pts) - 500]
+        changed = True
+        _maybe_takeoff(aid, s)
+    stale = [k for k, v in SNAPS.items() if now - (v.get("create_time") or 0) > SNAP_MAX_AGE_DAYS * 86400]
+    for k in stale:
+        SNAPS.pop(k, None)
+        changed = True
+    if changed:
+        _save(SNAPS_FILE, SNAPS)
+
+
+def _maybe_daily_digest():
+    """每天到点弹一条汇总：24h 更新数、破10万赞数、涨赞最快"""
+    hour = int(config.get("digest_hour", 9))
+    if hour < 0:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    if state.get("digest_date") == today or datetime.now().hour < hour:
+        return
+    cutoff = time.time() - 86400
+    ups = []
+    for u in state.get("updates", []):
+        try:
+            fa = time.mktime(time.strptime(u.get("found_at", ""), "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            continue
+        if fa >= cutoff:
+            ups.append(u)
+    fastest = None
+    for aid, s in SNAPS.items():
+        pts = [p for p in s["pts"] if p[0] >= cutoff]
+        if len(pts) < 2:
+            continue
+        dt_h = (pts[-1][0] - pts[0][0]) / 3600
+        if dt_h < 0.5:
+            continue
+        vel = (pts[-1][1] - pts[0][1]) / dt_h
+        if fastest is None or vel > fastest[0]:
+            fastest = (vel, s, pts[-1][1])
+    big = [u for u in ups if (u.get("digg") or 0) >= 100000]
+    if not ups and not fastest:
+        text = "过去24小时：库里博主没有新作品，也没有明显起飞的视频"
+    else:
+        lines = [f"过去24小时：库里博主更新 {len(ups)} 条作品"]
+        if big:
+            lines.append(f"其中 {len(big)} 条已破 10 万赞")
+        if fastest and fastest[0] >= 100:
+            v, s, dg = fastest
+            lines.append(f"涨赞最快：@{s['nickname']}《{s['desc'][:20]}》 {int(v):,} 赞/时（当前 {dg:,} 赞）")
+        text = "\n".join(lines)
+    state["digest_date"] = today
+    state["last_digest"] = {"date": today, "time": datetime.now().strftime("%H:%M"), "text": text}
+    _save(STATE_FILE, state)
+    notify("📰 每日爆款日报", text)
+
+
 async def check_blogger(blogger: dict, baseline: bool = False) -> int:
     platform = blogger.get("platform", "douyin")
     ad = get_adapter(platform)
@@ -367,6 +483,10 @@ async def check_blogger(blogger: dict, baseline: bool = False) -> int:
         return 0
     # 归一化一遍，拿到 (aid, create_time, raw)
     items = [(ad.normalize(a), a) for a in awemes]
+    try:
+        _record_snapshots(blogger, [it for it, _a in items])   # 顺手记点赞快照（起飞预警）
+    except Exception as e:
+        log_err(f"记录数据快照失败: {e}")
     seen = set(state["seen"].get(sec_uid, []))
     new_items = [(it, a) for (it, a) in items if it["aweme_id"] not in seen]
     if baseline or not seen:
@@ -397,6 +517,14 @@ async def monitor_loop():
             except Exception as e:
                 log_err(f"检查 {b.get('nickname')} 出错: {e}")
             await asyncio.sleep(2)
+        try:
+            await _check_mix_follows_due()   # 合集追更（每个合集最多 6 小时查一次）
+        except Exception as e:
+            log_err(f"合集追更检查出错: {e}")
+        try:
+            _maybe_daily_digest()            # 每日日报（到点弹一次）
+        except Exception as e:
+            log_err(f"日报生成出错: {e}")
         state["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _save(STATE_FILE, state)
         try:
@@ -464,6 +592,8 @@ async def api_aweme_images(aid: str, platform: str = "douyin"):
 @app.on_event("startup")
 async def _startup():
     asyncio.create_task(monitor_loop())
+    for _ in range(2):                       # 两个下载工人：并发温和，防限流
+        asyncio.create_task(_dl_worker())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -503,6 +633,12 @@ def api_status():
         "platforms": PLATFORM_LIST,
         "version": VERSION,
         "mix_progress": list(MIX_PROGRESS.values()),
+        "tasks": {k: sum(1 for t in DL_TASKS.values() if t["status"] == k)
+                  for k in ("queued", "running", "done", "failed")},
+        "takeoffs": state.get("takeoffs", [])[:20],
+        "last_digest": state.get("last_digest"),
+        "takeoff_vel": config.get("takeoff_vel", 3000),
+        "digest_hour": config.get("digest_hour", 9),
     }
 
 
@@ -663,37 +799,108 @@ def _has_media(a: dict, platform: str = "douyin") -> bool:
     return bool(it["video_url"])
 
 
+# ---------------- 下载任务中心：所有下载统一进队列，排队/进度/失败重试一目了然 ----------------
+DL_TASKS = {}                    # tid -> 任务记录（内存态，重启清空）
+DL_QUEUE: asyncio.Queue = asyncio.Queue()
+_task_seq = 0
+
+
+def enqueue_download(platform, nickname, aid, desc="", kind="单条", mix_id=None, mix_name=""):
+    global _task_seq
+    _task_seq += 1
+    tid = f"t{_task_seq}"
+    DL_TASKS[tid] = {"id": tid, "platform": platform, "nickname": nickname or "",
+                     "aweme_id": str(aid), "desc": (desc or "")[:60], "kind": kind,
+                     "mix_id": mix_id, "mix_name": mix_name,
+                     "status": "queued", "err": "", "ts": datetime.now().strftime("%H:%M:%S")}
+    DL_QUEUE.put_nowait(tid)
+    return tid
+
+
+async def _dl_worker():
+    while True:
+        tid = await DL_QUEUE.get()
+        t = DL_TASKS.get(tid)
+        if not t or t["status"] != "queued":
+            continue
+        t["status"] = "running"
+        ok = False
+        try:
+            platform = t["platform"]
+            aweme = await resolve_aweme(t["aweme_id"], platform)
+            if aweme:
+                nm = t["nickname"] or get_adapter(platform).normalize(aweme).get("author_name") or "未知博主"
+                t["nickname"] = nm
+                ok, _u = await download_aweme_media(nm, aweme, platform)
+                t["status"] = "done" if ok else "failed"
+                if not ok:
+                    t["err"] = "没拿到下载地址或写文件失败"
+            else:
+                t["status"] = "failed"
+                t["err"] = "拿不到作品详情（可能已删除/风控）"
+        except Exception as e:
+            t["status"] = "failed"
+            t["err"] = str(e)[:100]
+        if t.get("mix_id") and t["mix_id"] in MIX_PROGRESS:
+            mp = MIX_PROGRESS[t["mix_id"]]
+            mp["done"] += 1
+            if mp["done"] >= mp["total"]:
+                asyncio.create_task(_mix_progress_cleanup(t["mix_id"]))
+        await asyncio.sleep(1.2)   # 每个任务之间温和停一下，防限流/封号
+
+
+async def _mix_progress_cleanup(mid):
+    await asyncio.sleep(8)
+    MIX_PROGRESS.pop(mid, None)
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    counts = {k: 0 for k in ("queued", "running", "done", "failed")}
+    for t in DL_TASKS.values():
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    tasks = list(DL_TASKS.values())[-300:]
+    tasks.reverse()   # 最新的在前
+    return {"counts": counts, "tasks": tasks}
+
+
+@app.post("/api/tasks/retry_failed")
+def api_tasks_retry():
+    n = 0
+    for t in DL_TASKS.values():
+        if t["status"] == "failed":
+            t["status"] = "queued"
+            t["err"] = ""
+            DL_QUEUE.put_nowait(t["id"])
+            n += 1
+    return {"ok": True, "requeued": n}
+
+
+@app.post("/api/tasks/clear")
+def api_tasks_clear():
+    for tid in [k for k, t in DL_TASKS.items() if t["status"] in ("done", "failed")]:
+        DL_TASKS.pop(tid, None)
+    return {"ok": True}
+
+
 @app.post("/api/download_selected")
 async def api_download_selected(body: DownloadBody):
+    """所有手动下载统一进任务队列，接口秒回；进度看任务中心"""
     platform = getattr(body, "platform", None) or "douyin"
     nickname = _blogger_nickname(body.sec_user_id)
     cache = POSTS_CACHE.get(body.sec_user_id, {})
-    results = []
+    n = 0
     for aid in body.aweme_ids:
         aid = str(aid)
-        aweme = cache.get(aid)
-        # 缓存缺失，或（相关推荐预览版）没有下载地址 → 按 ID 重新拉完整详情
-        if aweme is None or not _has_media(aweme, platform):
-            try:
-                full = await resolve_aweme(aid, platform)
-                if full and _has_media(full, platform):
-                    aweme = full
-            except Exception as e:
-                if aweme is None:
-                    results.append({"aweme_id": aid, "ok": False, "err": str(e)[:80]})
-                    continue
-        if not aweme:
-            results.append({"aweme_id": aid, "ok": False, "err": "无数据"})
-            continue
-        nm = nickname or get_adapter(platform).normalize(aweme).get("author_name") or "未知博主"
-        try:
-            ok, _ = await download_aweme_media(nm, aweme, platform)
-            results.append({"aweme_id": aid, "ok": ok})
-        except Exception as e:
-            log_err(f"手动下载 {aid} 失败: {e}")
-            results.append({"aweme_id": aid, "ok": False, "err": str(e)[:80]})
-    ok_n = sum(1 for r in results if r["ok"])
-    return {"ok": True, "success": ok_n, "total": len(results), "results": results}
+        a = cache.get(aid)
+        desc, nm = "", nickname
+        if a:
+            it = get_adapter(platform).normalize(a)
+            desc = it["desc"]
+            nm = nm or it["author_name"]
+        enqueue_download(platform, nm, aid, desc)
+        n += 1
+    return {"ok": True, "queued": n, "success": n, "total": n}
 
 
 MIX_PROGRESS = {}   # mix_id -> {name, done, total}
@@ -732,6 +939,7 @@ async def api_download_mix(body: MixBody):
 
 
 async def _download_mix_bg(mix_id, mix_name, nickname, total_hint, platform="douyin"):
+    """抓合集全集列表 → 跳过本地已有的集 → 缺的集进下载队列。下过的合集自动进「追更列表」。"""
     ad = get_adapter(platform)
     MIX_PROGRESS[mix_id] = {"name": mix_name, "done": 0, "total": total_hint or 0}
     episodes = []
@@ -739,31 +947,145 @@ async def _download_mix_bg(mix_id, mix_name, nickname, total_hint, platform="dou
         episodes = await ad.mix(_cookie(platform), mix_id, max_count=500)
     except Exception as e:
         log_err(f"抓合集失败: {e}")
-    if episodes:
-        MIX_PROGRESS[mix_id]["total"] = len(episodes)
-    failed = 0
+    if not episodes:
+        MIX_PROGRESS.pop(mix_id, None)
+        return
+    done_tags = _downloaded_tags(nickname, platform)
+    stash = POSTS_CACHE.setdefault("_mix", {})   # 暂存完整数据，worker 下载时免重拉详情
+    new_eps = []
     for ep in episodes:
-        aid = ad.normalize(ep)["aweme_id"]
-        ok = False
-        for attempt in range(2):   # 失败重试一次（限流常是偶发）
-            try:
-                aw = ep if _has_media(ep, platform) else None
-                if aw is None:
-                    aw = await resolve_aweme(aid, platform)
-                if aw:
-                    ok, _ = await download_aweme_media(nickname, aw, platform)
-                if ok:
-                    break
-            except Exception as e:
-                log_err(f"合集下载一集失败: {e}")
-            await asyncio.sleep(2)   # 重试前稍等
-        if not ok:
-            failed += 1
-        MIX_PROGRESS[mix_id]["done"] += 1
-        await asyncio.sleep(1.2)    # 每集之间温和停一下，防限流/封号
-    print(f"[MIX] 合集《{mix_name}》完成 {MIX_PROGRESS[mix_id]['done']}/{len(episodes)}，失败 {failed}", flush=True)
-    await asyncio.sleep(10)
-    MIX_PROGRESS.pop(mix_id, None)
+        it = ad.normalize(ep)
+        stash[it["aweme_id"]] = ep
+        if it["aweme_id"][-6:] in done_tags:
+            continue                              # 本地已有的集跳过 → 补齐只下新集
+        new_eps.append((it["aweme_id"], it["desc"]))
+    _upsert_mix_follow(mix_id, mix_name, nickname, platform, len(episodes),
+                       sample_aid=ad.normalize(episodes[0])["aweme_id"])
+    if not new_eps:
+        MIX_PROGRESS.pop(mix_id, None)
+        print(f"[MIX] 《{mix_name}》没有新集要下（本地已齐 {len(episodes)} 集）", flush=True)
+        return
+    MIX_PROGRESS[mix_id]["total"] = len(new_eps)
+    for aid, desc in new_eps:
+        enqueue_download(platform, nickname, aid, desc,
+                         kind=f"合集《{mix_name}》", mix_id=mix_id, mix_name=mix_name)
+    print(f"[MIX] 《{mix_name}》{len(new_eps)} 集已进下载队列（云端共 {len(episodes)} 集）", flush=True)
+
+
+# ---------------- 合集追更：下过的合集自动盯更新，新集弹窗+一键补齐 ----------------
+MIX_FOLLOW_INTERVAL = 6 * 3600   # 每个合集最多 6 小时自动查一次
+
+
+def _upsert_mix_follow(mix_id, mix_name, nickname, platform, total, sample_aid):
+    fl = config.setdefault("mix_follows", [])
+    hit = next((f for f in fl if f["mix_id"] == mix_id), None)
+    now_s = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if hit:   # 刚下载/补齐过 → 本地追平云端
+        hit.update(mix_name=mix_name or hit.get("mix_name"), cloud_total=total,
+                   known_total=total, last_check=now_s, last_check_ts=time.time(),
+                   sample_aid=str(sample_aid) or hit.get("sample_aid"))
+    else:
+        fl.append({"mix_id": mix_id, "mix_name": mix_name, "nickname": nickname,
+                   "platform": platform, "sample_aid": str(sample_aid),
+                   "cloud_total": total, "known_total": total,
+                   "last_check": now_s, "last_check_ts": time.time(), "added_at": now_s})
+    _save(CONFIG_FILE, config)
+
+
+async def _check_mix_follow(f) -> int:
+    """查一个合集的云端集数（1 次请求：拉样本集详情读 mix 元数据）。涨了→弹窗，返回新增集数。"""
+    platform = f.get("platform", "douyin")
+    ad = get_adapter(platform)
+    full = await ad.one_video(_cookie(platform), f["sample_aid"])
+    f["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    f["last_check_ts"] = time.time()
+    m = _mix_of(full, platform) if full else None
+    if not m or not m.get("total"):
+        _save(CONFIG_FILE, config)
+        return 0
+    old_cloud = f.get("cloud_total") or 0
+    f["cloud_total"] = m["total"]
+    _save(CONFIG_FILE, config)
+    gained = m["total"] - (f.get("known_total") or 0)
+    if m["total"] > old_cloud and gained > 0:
+        notify(f"📺 合集更新：《{f['mix_name']}》",
+               f"更新到 {m['total']} 集（新出 {m['total'] - old_cloud} 集）\n到「下载库 → 合集追更」一键补齐")
+    return gained
+
+
+async def _check_mix_follows_due(force: bool = False):
+    for f in list(config.get("mix_follows", [])):
+        if not force and time.time() - (f.get("last_check_ts") or 0) < MIX_FOLLOW_INTERVAL:
+            continue
+        try:
+            await _check_mix_follow(f)
+        except Exception as e:
+            log_err(f"追更检查《{f.get('mix_name')}》失败: {e}")
+        await asyncio.sleep(2)
+
+
+@app.get("/api/mix_follows")
+def api_mix_follows(platform: str = ""):
+    out = []
+    for f in config.get("mix_follows", []):
+        if platform and f.get("platform", "douyin") != platform:
+            continue
+        d = dict(f)
+        d["new_count"] = max(0, (f.get("cloud_total") or 0) - (f.get("known_total") or 0))
+        out.append(d)
+    return {"follows": out}
+
+
+class MixCheckBody(BaseModel):
+    mix_id: str = ""      # 空 = 检查全部
+    platform: str = "douyin"
+
+
+@app.post("/api/mix_follows/check")
+async def api_mix_follows_check(body: MixCheckBody):
+    targets = [f for f in config.get("mix_follows", []) if not body.mix_id or f["mix_id"] == body.mix_id]
+    gained = {}
+    for i, f in enumerate(targets):
+        try:
+            gained[f["mix_name"]] = await _check_mix_follow(f)
+        except Exception as e:
+            log_err(f"追更检查失败: {e}")
+            gained[f["mix_name"]] = -1
+        if i < len(targets) - 1:
+            await asyncio.sleep(1.5)
+    return {"ok": True, "gained": gained}
+
+
+@app.post("/api/mix_follows/pull")
+async def api_mix_follow_pull(body: MixCheckBody):
+    f = next((x for x in config.get("mix_follows", []) if x["mix_id"] == body.mix_id), None)
+    if not f:
+        return JSONResponse({"error": "这个合集不在追更列表里"}, status_code=404)
+    if f["mix_id"] in MIX_PROGRESS:
+        return {"ok": True, "already": True}
+    asyncio.create_task(_download_mix_bg(f["mix_id"], f["mix_name"], f["nickname"],
+                                         f.get("cloud_total") or 0, f.get("platform", "douyin")))
+    return {"ok": True}
+
+
+@app.delete("/api/mix_follows/{mix_id}")
+def api_mix_follow_del(mix_id: str):
+    config["mix_follows"] = [f for f in config.get("mix_follows", []) if f["mix_id"] != mix_id]
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
+
+
+class RadarBody(BaseModel):
+    takeoff_vel: int = 3000
+    digest_hour: int = 9
+
+
+@app.post("/api/radar_settings")
+def api_radar_settings(body: RadarBody):
+    config["takeoff_vel"] = max(0, body.takeoff_vel)
+    config["digest_hour"] = max(-1, min(23, body.digest_hour))
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
 
 
 class DiscoverBody(BaseModel):
