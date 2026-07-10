@@ -505,13 +505,44 @@
             <label style="font-size:13px;color:var(--sub)">简介（套用所有，可空）
               <input id="chDesc" placeholder="视频描述文案" style="width:100%;margin-top:5px"></label>
           </div>
-          <div class="row" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <div style="border-top:1px solid var(--line);margin:6px 0 12px"></div>
+          <div style="font-weight:700;font-size:14px;margin-bottom:10px">分发设置</div>
+          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <label style="font-size:13px;color:var(--sub)">分发模式
+              <select id="chDistribute" onchange="chPreview()" style="margin-left:6px">
+                <option value="multi">多对一（每个号都发全部视频）</option>
+                <option value="one2one">一对一（视频平摊到各号）</option>
+              </select></label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
+              <span class="switch"><input type="checkbox" id="chShuffle" onchange="chPreview()"><span class="slider"></span></span>打乱作品顺序</label>
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
               <span class="switch"><input type="checkbox" id="chOriginal"><span class="slider"></span></span>声明原创</label>
-            <label style="font-size:13px;color:var(--sub)">定时发布（留空=立即）
-              <input type="datetime-local" id="chSchedule" style="margin-left:6px"></label>
-            <span style="color:var(--dim);font-size:12px">标题在下面每条单独填（默认用文件名）</span>
           </div>
+          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <label style="font-size:13px;color:var(--sub)">发布时间
+              <select id="chTimeMode" onchange="chTimeModeChange();chPreview()" style="margin-left:6px">
+                <option value="now">立即发布</option>
+                <option value="schedule">定时发布（推给视频号官方定时）</option>
+                <option value="local">本机定时（软件到点再发）</option>
+              </select></label>
+            <input type="datetime-local" id="chBaseTime" onchange="chPreview()" style="display:none">
+          </div>
+          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+            <label style="font-size:13px;color:var(--sub)">作品间隔
+              <select id="chClipGap" onchange="chPreview()" style="margin-left:6px">
+                <option value="0">无间隔</option><option value="30">30 秒</option>
+                <option value="60">1 分钟</option><option value="300">5 分钟</option>
+                <option value="600">10 分钟</option><option value="1800">30 分钟</option>
+              </select></label>
+            <label style="font-size:13px;color:var(--sub)">账号间隔
+              <select id="chAcctGap" onchange="chPreview()" style="margin-left:6px">
+                <option value="0">无间隔</option><option value="30">30 秒</option>
+                <option value="60">1 分钟</option><option value="300">5 分钟</option>
+                <option value="600">10 分钟</option><option value="1800">30 分钟</option>
+              </select></label>
+            <span style="color:var(--dim);font-size:12px">间隔=错峰发，降风控/封号</span>
+          </div>
+          <div id="chPreviewBox" style="margin-top:12px"></div>
         </div>
 
         <div class="ptoolbar">
@@ -1098,7 +1129,7 @@ function toggleChVid(v){
   const i=chPick.findIndex(p=>p.path===v.path);
   if(i>=0) chPick.splice(i,1);
   else chPick.push({path:v.path, name:v.name, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)});
-  renderChVideoGrid(); renderPickList();
+  renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview();
 }
 function renderPickList(){
   document.getElementById('chPickCount').textContent=chPick.length;
@@ -1111,23 +1142,46 @@ function renderPickList(){
       <button class="x" onclick="removePick(${i})">✕</button>
     </div>`).join('');
 }
-function removePick(i){ chPick.splice(i,1); renderChVideoGrid(); renderPickList(); }
+function removePick(i){ chPick.splice(i,1); renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview(); }
 
-async function startUpload(btn){
-  if(!chPick.length){ uiAlert('先在上面选视频'); return; }
-  if(!chAccSel.size){ uiAlert('先勾选要发到哪些账号'); return; }
+function chBody(){
   const tagsStr=document.getElementById('chTags').value.trim();
   const tags=tagsStr?tagsStr.split(/[,，\s]+/).filter(Boolean):[];
   const desc=document.getElementById('chDesc').value.trim();
   const original=document.getElementById('chOriginal').checked;
-  const schedRaw=document.getElementById('chSchedule').value;
-  const schedule=schedRaw?schedRaw.replace('T',' '):'';
-  const items=chPick.map(p=>({video_path:p.path, title:p.title||p.name, tags, desc, original, schedule}));
+  const items=chPick.map(p=>({video_path:p.path, title:p.title||p.name, tags, desc, original}));
+  const bt=document.getElementById('chBaseTime').value;
+  return {items, account_ids:[...chAccSel],
+    distribute:document.getElementById('chDistribute').value,
+    shuffle:document.getElementById('chShuffle').checked,
+    time_mode:document.getElementById('chTimeMode').value,
+    base_time:bt?bt.replace('T',' '):'',
+    clip_gap_sec:parseInt(document.getElementById('chClipGap').value)||0,
+    acct_gap_sec:parseInt(document.getElementById('chAcctGap').value)||0};
+}
+function chTimeModeChange(){
+  const m=document.getElementById('chTimeMode').value;
+  document.getElementById('chBaseTime').style.display=(m==='now')?'none':'inline-block';
+}
+async function chPreview(){
+  const box=document.getElementById('chPreviewBox'); if(!box) return;
+  if(!chPick.length||!chAccSel.size){ box.innerHTML=''; return; }
+  try{
+    const d=await api('/api/channels/upload/preview','POST',chBody());
+    box.innerHTML=`<div class="card" style="padding:10px 14px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px">📋 分发预览：${d.accounts} 个账号 · 共 ${d.count} 条发布任务</div>
+      <div style="max-height:150px;overflow:auto;font-size:12.5px;color:var(--sub);line-height:1.9">
+      ${d.rows.map(r=>`<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:var(--acc2)">[${esc(r.account)}]</span> ${esc(r.title)} <span style="color:var(--dim)">· ${esc(r.when)}</span></div>`).join('')}</div></div>`;
+  }catch(e){ box.innerHTML=''; }
+}
+async function startUpload(btn){
+  if(!chPick.length){ uiAlert('先在上面选视频'); return; }
+  if(!chAccSel.size){ uiAlert('先勾选要发到哪些账号'); return; }
   const old=btn.innerHTML; btn.disabled=true; btn.textContent='入队中…';
   try{
-    const d=await api('/api/channels/upload','POST',{items, account_ids:[...chAccSel]});
-    toast(`已入队 ${d.queued} 条（${d.accounts} 个账号 × ${chPick.length} 视频），浏览器自动逐条发`);
-    chPick=[]; renderChVideoGrid(); renderPickList(); refreshChannels();
+    const d=await api('/api/channels/upload','POST',chBody());
+    toast(`已入队 ${d.queued} 条发布任务（${d.accounts} 个账号），浏览器自动逐条发`);
+    chPick=[]; renderChVideoGrid(); renderPickList(); chPreview(); refreshChannels();
   }catch(e){ uiAlert(e.message); }
   btn.disabled=false; btn.innerHTML=old;
 }
@@ -1175,7 +1229,7 @@ function renderAccPick(){
     `<button class="tab ${chAccSel.has(a.id)?'on':''}" style="padding:6px 12px" onclick="toggleAccSel('${a.id}')">${esc(a.name)}</button>`
   ).join('') : '<span style="color:var(--dim);font-size:12px">没有在线账号——先在上面添加/登录</span>';
 }
-function toggleAccSel(id){ if(chAccSel.has(id))chAccSel.delete(id); else chAccSel.add(id); renderAccPick(); }
+function toggleAccSel(id){ if(chAccSel.has(id))chAccSel.delete(id); else chAccSel.add(id); renderAccPick(); if(typeof chPreview==='function')chPreview(); }
 function chSelAllAcc(){ chAccounts.filter(a=>a.online).forEach(a=>chAccSel.add(a.id)); renderAccPick(); }
 
 const UP_ST={queued:['⏳','排队',''],running:['📤','上传中','load'],done:['✅','完成','ok'],failed:['❌','失败','fail']};

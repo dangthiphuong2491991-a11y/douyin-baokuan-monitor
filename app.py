@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -1674,33 +1674,73 @@ class UploadItem(BaseModel):
 class UploadBody(BaseModel):
     items: list[UploadItem] = []
     account_ids: list[str] = []      # 发到哪些账号（空=所有在线账号）
+    distribute: str = "multi"        # multi=多对一(每号发全部) / one2one=一对一(视频平摊到各号)
+    shuffle: bool = False            # 打乱作品顺序
+    time_mode: str = "now"           # now=立即 / schedule=平台定时 / local=本机定时
+    base_time: str = ""              # "YYYY-MM-DD HH:MM"（定时/本机定时的起始时间）
+    clip_gap_sec: int = 0            # 作品间隔（秒）：同账号发多条之间
+    acct_gap_sec: int = 0            # 账号间隔（秒）：不同账号之间
+
+
+def _plan_upload(body: "UploadBody"):
+    """算出分发计划：[(account_id, name, item, publish_at)]。不入队，供预览/发布共用。"""
+    online = [a["id"] for a in _ch_accounts() if ch_online(a["id"])]
+    targets = [a for a in body.account_ids if a in online] if body.account_ids else online
+    items = [it for it in body.items if Path(it.video_path).exists()]
+    if body.shuffle:
+        items = items[:]
+        random.shuffle(items)
+    base = None
+    if body.time_mode in ("schedule", "local") and body.base_time:
+        try:
+            base = datetime.strptime(body.base_time, "%Y-%m-%d %H:%M")
+        except Exception:
+            base = None
+    base = base or datetime.now()
+    plan = []
+    for ai, aid in enumerate(targets):
+        acc = _ch_account(aid)
+        aname = acc["name"] if acc else aid
+        my = [items[i] for i in range(len(items)) if i % len(targets) == ai] \
+            if body.distribute == "one2one" and targets else items
+        for ci, it in enumerate(my):
+            at = base + timedelta(seconds=ai * body.acct_gap_sec + ci * body.clip_gap_sec)
+            plan.append((aid, aname, it, at))
+    return targets, plan
+
+
+@app.post("/api/channels/upload/preview")
+def api_channels_preview(body: UploadBody):
+    targets, plan = _plan_upload(body)
+    rows = [{"account": aname, "title": it.title or Path(it.video_path).stem,
+             "when": at.strftime("%m-%d %H:%M") if body.time_mode != "now" else "立即"}
+            for (aid, aname, it, at) in plan]
+    return {"accounts": len(targets), "count": len(plan), "rows": rows[:200]}
 
 
 @app.post("/api/channels/upload")
 def api_channels_upload(body: UploadBody):
-    online = [a["id"] for a in _ch_accounts() if ch_online(a["id"])]
-    targets = [a for a in body.account_ids if a in online] if body.account_ids else online
+    targets, plan = _plan_upload(body)
     if not targets:
         return JSONResponse({"error": "没有在线的视频号账号，请先添加/登录账号"}, status_code=400)
+    if not plan:
+        return JSONResponse({"error": "没有有效视频"}, status_code=400)
     global _up_seq
-    n = 0
-    for aid in targets:
-        acc = _ch_account(aid)
-        aname = acc["name"] if acc else aid
-        for it in body.items:
-            if not Path(it.video_path).exists():
-                continue
-            _up_seq += 1
-            tid = f"u{_up_seq}"
-            UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": aname,
-                                 "title": it.title or Path(it.video_path).stem,
-                                 "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
-                                 "cover_path": it.cover_path, "original": it.original,
-                                 "schedule": it.schedule, "status": "queued", "stage": "", "err": "",
-                                 "ts": datetime.now().strftime("%H:%M:%S")}
-            UPLOAD_QUEUE.put_nowait(tid)
-            n += 1
-    return {"ok": True, "queued": n, "accounts": len(targets)}
+    for aid, aname, it, at in plan:
+        sched_str = at.strftime("%Y-%m-%d %H:%M") if body.time_mode == "schedule" else ""
+        _up_seq += 1
+        tid = f"u{_up_seq}"
+        UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": aname,
+                             "title": it.title or Path(it.video_path).stem,
+                             "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
+                             "cover_path": it.cover_path, "original": it.original,
+                             "schedule": sched_str,
+                             "publish_at": at.timestamp() if body.time_mode == "local" else 0,
+                             "when": at.strftime("%m-%d %H:%M") if body.time_mode != "now" else "",
+                             "status": "queued", "stage": "", "err": "",
+                             "ts": datetime.now().strftime("%H:%M:%S")}
+        UPLOAD_QUEUE.put_nowait(tid)
+    return {"ok": True, "queued": len(plan), "accounts": len(targets)}
 
 
 @app.post("/api/channels/tasks/retry_failed")
@@ -1731,6 +1771,14 @@ async def _upload_worker():
         if not aid or not ch_online(aid):
             t.update(status="failed", err="该账号未登录")
             continue
+        pa = t.get("publish_at") or 0     # 本机定时：软件等到点再发
+        if pa:
+            while t["status"] == "queued":
+                wait = pa - time.time()
+                if wait <= 0:
+                    break
+                t["stage"] = f"本机定时等待中（还 {int(wait)}s）"
+                await asyncio.sleep(min(wait, 10))
         t["status"] = "running"
         sched = None
         if t.get("schedule"):
