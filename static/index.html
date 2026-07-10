@@ -189,6 +189,7 @@
       <a data-page="tasks"><span class="ic">⬇</span>任务中心<span class="badge" id="taskBadge" style="display:none">0</span></a>
       <div class="grp">加工 / 发布</div>
       <a data-page="dedup"><span class="ic">🎞</span>视频去重<span class="badge" id="ddBadge" style="display:none">0</span></a>
+      <a data-page="jy"><span class="ic">🎬</span>剪映混剪</a>
       <a data-page="channels"><span class="ic">📤</span>视频号发布<span class="badge" id="upBadge" style="display:none">0</span></a>
       <div class="grp">配置</div>
       <a data-page="set"><span class="ic">⚙️</span>设置</a>
@@ -417,6 +418,53 @@
           <button class="btn ghost" onclick="ddClear()">🧹 清除完成/失败</button>
         </div>
         <div id="ddList" style="display:flex;flex-direction:column;gap:8px"></div>
+      </section>
+
+      <!-- 剪映混剪 -->
+      <section class="page" id="page-jy">
+        <h2 class="hero">剪映<span class="g">混剪合成</span></h2>
+        <div class="lead">选一个剪映草稿当模板，把「去重导出」的视频塞进主轨道、随机变速，批量生成 N 个新草稿。生成后打开剪映导出。<b style="color:var(--warn)">保留模板的字幕/特效/BGM，只换主轨道视频。</b></div>
+
+        <div id="jyNoInstall" class="card" style="display:none;padding:16px 18px;margin-bottom:16px;border-color:var(--warn)">
+          ⚠ 没检测到剪映专业版。这个功能需要本机装了剪映（用它自己的引擎解密/加密草稿）。
+        </div>
+
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div class="setrow" style="padding:12px 0">
+            <div class="l"><div class="t">模板草稿</div><div class="d">以它为壳，清空主轨道换成你的视频，保留它的花字/特效/BGM</div></div>
+            <select id="jyTemplate" style="min-width:220px"><option>加载中…</option></select>
+            <button class="btn ghost" style="padding:8px 12px" onclick="loadJyDrafts()">🔄</button>
+          </div>
+          <div class="setrow" style="padding:12px 0">
+            <div class="l"><div class="t">素材来源</div><div class="d">从这个文件夹随机抽视频片段（默认＝去重导出）</div></div>
+            <input id="jyFolder" placeholder="留空＝去重导出文件夹" style="min-width:300px">
+          </div>
+          <div class="setrow" style="padding:12px 0">
+            <div class="l"><div class="t">定量方式</div><div class="d">每个草稿装多少片段</div></div>
+            <select id="jyMode" onchange="jyModeChange()">
+              <option value="count">固定条数</option>
+              <option value="duration">按目标时长填满</option>
+            </select>
+            <span id="jyCountWrap">每草稿 <input type="number" id="jyNClips" value="5" min="1" max="50" style="width:66px;padding:6px 8px"> 条</span>
+            <span id="jyDurWrap" style="display:none">目标 <input type="number" id="jyTargetSec" value="60" min="5" step="5" style="width:72px;padding:6px 8px"> 秒</span>
+          </div>
+          <div class="setrow" style="padding:12px 0">
+            <div class="l"><div class="t">随机变速</div><div class="d">每个片段在这个范围内随机取速（过原创）</div></div>
+            <input type="number" id="jySpeedMin" value="0.9" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px"> ~
+            <input type="number" id="jySpeedMax" value="1.0" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px"> 倍
+          </div>
+          <div class="setrow" style="padding:12px 0">
+            <div class="l"><div class="t">生成数量 / 命名</div><div class="d">一次生成几个草稿，草稿名前缀</div></div>
+            <input id="jyPrefix" value="混剪" style="width:120px"> ×
+            <input type="number" id="jyCount" value="3" min="1" max="50" style="width:66px;padding:6px 8px"> 个
+          </div>
+        </div>
+
+        <div class="ptoolbar">
+          <span id="jyStatus" style="color:var(--sub)"></span>
+          <button class="btn" id="jyBtn" onclick="runJy(this)" style="margin-left:auto">🎬 开始生成草稿</button>
+        </div>
+        <div id="jyResult" style="margin-top:14px"></div>
       </section>
 
       <!-- 视频号发布 -->
@@ -671,7 +719,7 @@ async function api(url, method='GET', body){
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
 
 /* nav */
-const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'视频去重',channels:'视频号发布',set:'设置'};
+const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'视频去重',jy:'剪映混剪',channels:'视频号发布',set:'设置'};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on');
@@ -683,6 +731,7 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   if(p==='tasks') startTaskPoll();
   if(p==='channels') openChannels();
   if(p==='dedup') openDedup();
+  if(p==='jy') openJy();
 });
 
 function render(st){
@@ -886,6 +935,63 @@ async function retryFailed(btn){
   btn.disabled=false;
 }
 async function clearTasks(){ try{ await api('/api/tasks/clear','POST'); loadTasks(); }catch(e){} }
+
+/* ---- 剪映混剪 ---- */
+let jyTimer=null;
+function openJy(){ loadJyDrafts(); startJyPoll(); }
+async function loadJyDrafts(){
+  const sel=document.getElementById('jyTemplate');
+  try{
+    const d=await api('/api/jy/drafts');
+    document.getElementById('jyNoInstall').style.display=d.installed?'none':'block';
+    const ds=d.drafts||[];
+    sel.innerHTML = ds.length? ds.map(x=>`<option>${esc(x.name)}</option>`).join('')
+      : '<option value="">（没有草稿，先在剪映里建一个模板草稿）</option>';
+  }catch(e){ sel.innerHTML='<option value="">加载失败</option>'; }
+}
+function jyModeChange(){
+  const m=document.getElementById('jyMode').value;
+  document.getElementById('jyCountWrap').style.display=m==='count'?'inline':'none';
+  document.getElementById('jyDurWrap').style.display=m==='duration'?'inline':'none';
+}
+async function runJy(btn){
+  const tpl=document.getElementById('jyTemplate').value;
+  if(!tpl){ uiAlert('先选一个模板草稿'); return; }
+  const body={
+    template:tpl,
+    clips_folder:document.getElementById('jyFolder').value.trim(),
+    out_prefix:document.getElementById('jyPrefix').value.trim()||'混剪',
+    count:parseInt(document.getElementById('jyCount').value)||1,
+    mode:document.getElementById('jyMode').value,
+    n_clips:parseInt(document.getElementById('jyNClips').value)||5,
+    target_sec:parseInt(document.getElementById('jyTargetSec').value)||60,
+    speed_min:parseFloat(document.getElementById('jySpeedMin').value)||1,
+    speed_max:parseFloat(document.getElementById('jySpeedMax').value)||1,
+  };
+  btn.disabled=true; btn.textContent='生成中…';
+  try{ await api('/api/jy/compose','POST',body); toast('开始生成，进度看下方'); jyPoll(); }
+  catch(e){ uiAlert(e.message); btn.disabled=false; btn.textContent='🎬 开始生成草稿'; }
+}
+async function jyPoll(){
+  try{
+    const s=await api('/api/jy/status');
+    document.getElementById('jyStatus').textContent=s.status||'';
+    const btn=document.getElementById('jyBtn');
+    btn.disabled=s.running; btn.textContent=s.running?'生成中…':'🎬 开始生成草稿';
+    const r=document.getElementById('jyResult');
+    if(s.made&&s.made.length){
+      r.innerHTML=`<div class="card" style="padding:14px 16px;border-color:rgba(37,208,125,.4)">
+        <div style="font-weight:800;margin-bottom:6px">✅ 生成了 ${s.made.length} 个草稿</div>
+        <div style="color:var(--sub);font-size:13px">${s.made.map(esc).join('、')}</div>
+        <div style="color:var(--dim);font-size:12px;margin-top:8px">打开剪映 → 草稿列表就能看到，点开导出即可</div></div>`;
+    } else if(s.error){ r.innerHTML=emptyBox('⚠','生成失败',s.error); }
+  }catch(e){}
+}
+function startJyPoll(){
+  jyPoll(); clearInterval(jyTimer);
+  jyTimer=setInterval(()=>{ const pg=document.getElementById('page-jy');
+    if(pg&&pg.classList.contains('on')) jyPoll(); else{ clearInterval(jyTimer); jyTimer=null; } },2500);
+}
 
 /* ---- 视频去重 ---- */
 let ddVideos=[], ddPick=new Set(), ddTimer=null;

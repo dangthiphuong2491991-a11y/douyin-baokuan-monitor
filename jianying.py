@@ -177,7 +177,8 @@ def compose_one(template_name, clip_paths, out_name, speed_range=(0.9, 1.0)):
         play_us = int(dur_us / spd)
         # 新视频素材（克隆原型，改路径/时长/尺寸）
         nm = copy.deepcopy(proto_mat)
-        nm.update(id=_new_id(), path=clip.replace("\\", "/"), duration=dur_us, width=w, height=h,
+        abspath = os.path.abspath(clip).replace("\\", "/")   # 必须绝对路径，否则剪映"媒体丢失"
+        nm.update(id=_new_id(), path=abspath, duration=dur_us, width=w, height=h,
                   material_name=os.path.basename(clip), has_audio=True,
                   material_id="", local_material_id="", category_name="", category_id="", crop={})
         mats["videos"].append(nm)
@@ -205,6 +206,57 @@ def compose_one(template_name, clip_paths, out_name, speed_range=(0.9, 1.0)):
     tj["duration"] = cursor
     _write_draft(template_name, out_name, tj)
     return out_name
+
+
+def collect_clips(folder: str) -> list:
+    """递归收集文件夹里的 mp4（绝对路径）。"""
+    out = []
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            if f.lower().endswith(".mp4") and not f.endswith(".part"):
+                out.append(os.path.abspath(os.path.join(root, f)))
+    return out
+
+
+def compose_batch(template_name, clips_folder, out_prefix, count=1, mode="count",
+                  n_clips=5, target_sec=60, speed_range=(0.9, 1.0), on_status=None):
+    """批量生成 count 个混剪草稿。mode='count'固定N条 / 'duration'按目标时长填满。
+    每个草稿随机抽片段（草稿内不重复）。返回生成的草稿名列表。"""
+    pool = collect_clips(clips_folder)
+    if not pool:
+        raise RuntimeError(f"素材文件夹里没有 mp4：{clips_folder}")
+    made = []
+    dur_cache = {}
+    for i in range(count):
+        random.shuffle(pool)
+        if mode == "duration":
+            picked, total = [], 0
+            for c in pool:
+                if c not in dur_cache:
+                    try:
+                        dur_cache[c] = _probe(c)[0]
+                    except Exception:
+                        dur_cache[c] = 0
+                if dur_cache[c] <= 0:
+                    continue
+                picked.append(c)
+                total += dur_cache[c]
+                if total >= target_sec * 1e6:
+                    break
+        else:
+            picked = pool[:max(1, int(n_clips))]
+        if not picked:
+            continue
+        name = f"{out_prefix}_{i + 1}"
+        if on_status:
+            on_status(f"生成 {name}（{len(picked)} 段）")
+        try:
+            compose_one(template_name, picked, name, speed_range)
+            made.append(name)
+        except Exception as e:
+            if on_status:
+                on_status(f"{name} 失败：{str(e)[:80]}")
+    return made
 
 
 def _write_draft(template_name, out_name, content):

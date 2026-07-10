@@ -22,6 +22,7 @@ import platforms
 from platforms import get_adapter, PLATFORM_LIST
 import channels
 import dedup
+import jianying
 
 
 async def resolve_aweme_id(text: str, platform: str = "douyin"):
@@ -1733,6 +1734,62 @@ async def _dedup_worker():
                      out=str(out) if ok else "")
         except Exception as e:
             t.update(status="failed", err=str(e)[:150])
+
+
+# ==================== 剪映混剪（调剪映 DLL 解密→改主轨道→加密写新草稿） ====================
+JY = {"running": False, "status": "", "made": [], "error": ""}
+
+
+@app.get("/api/jy/drafts")
+def api_jy_drafts():
+    try:
+        installed = bool(jianying.find_install_dir())
+        return {"ok": True, "installed": installed, "drafts": jianying.list_drafts()}
+    except Exception as e:
+        return {"ok": False, "installed": False, "error": str(e)[:150], "drafts": []}
+
+
+class JyComposeBody(BaseModel):
+    template: str
+    clips_folder: str = ""       # 空 = 去重导出文件夹
+    out_prefix: str = "混剪"
+    count: int = 1
+    mode: str = "count"          # count 固定N条 / duration 按时长
+    n_clips: int = 5
+    target_sec: int = 60
+    speed_min: float = 0.9
+    speed_max: float = 1.0
+
+
+async def _jy_compose_bg(body: "JyComposeBody"):
+    JY.update(running=True, status="开始…", made=[], error="")
+    try:
+        folder = body.clips_folder or str(_dedup_out_dir())
+        made = await asyncio.to_thread(
+            jianying.compose_batch, body.template, folder, body.out_prefix,
+            body.count, body.mode, body.n_clips, body.target_sec,
+            (body.speed_min, body.speed_max), lambda m: JY.update(status=m))
+        JY.update(made=made, status=f"完成，生成 {len(made)} 个草稿（打开剪映查看）")
+    except Exception as e:
+        JY.update(error=str(e)[:200], status=f"出错：{str(e)[:120]}")
+        log_err(f"剪映混剪出错: {e}")
+    finally:
+        JY["running"] = False
+
+
+@app.post("/api/jy/compose")
+async def api_jy_compose(body: JyComposeBody):
+    if JY["running"]:
+        return {"ok": True, "already": True}
+    if not jianying.find_install_dir():
+        return JSONResponse({"error": "没检测到剪映专业版，请先装剪映"}, status_code=400)
+    asyncio.create_task(_jy_compose_bg(body))
+    return {"ok": True}
+
+
+@app.get("/api/jy/status")
+def api_jy_status():
+    return JY
 
 
 @app.get("/api/check_update")
