@@ -33,20 +33,34 @@ def _cleanup_leftovers():
 
 
 def _ensure_desktop_shortcut():
-    """确保桌面有个「爆款监控」快捷方式指向当前 exe（进程内直接建，比 subprocess 可靠）"""
+    """只在【第一次运行】给桌面建一个「爆款监控」快捷方式；之后绝不重建/覆盖，
+    尊重用户自己管理的图标（删了不会自己长回来，你自己的入口也不碰）。"""
     if not getattr(sys, "frozen", False):
         return
     try:
+        marker = os.path.join(os.path.dirname(sys.executable), ".shortcut_done")
         import pythoncom
         from win32com.client import Dispatch
         pythoncom.CoInitialize()
         shell = Dispatch("WScript.Shell")
         desktop = shell.SpecialFolders("Desktop")   # 兼容 OneDrive 重定向的桌面
-        sc = shell.CreateShortCut(os.path.join(desktop, "爆款监控.lnk"))
+        lnk = os.path.join(desktop, "爆款监控.lnk")
+        # 建过一次 / 桌面已存在同名快捷方式 → 一律不动
+        if os.path.exists(marker) or os.path.exists(lnk):
+            try:
+                open(marker, "w").close()
+            except Exception:
+                pass
+            return
+        sc = shell.CreateShortCut(lnk)
         sc.Targetpath = sys.executable
         sc.WorkingDirectory = os.path.dirname(sys.executable)
         sc.IconLocation = sys.executable
         sc.save()
+        try:
+            open(marker, "w").close()
+        except Exception:
+            pass
     except Exception:
         pass
 
