@@ -467,106 +467,155 @@
         <div id="jyResult" style="margin-top:14px"></div>
       </section>
 
-      <!-- 视频号发布 -->
+      <!-- 视频号发布（仿小V猫：账号管理 + 一键发布） -->
       <section class="page" id="page-channels">
-        <h2 class="hero">视频号<span class="g">发布</span></h2>
-        <div class="lead">把下载库里的视频批量发到微信视频号。走系统浏览器自动化，需先扫码登录。<b style="color:var(--warn)">请只发你有版权/已授权/做过二创的内容，纯搬运有封号风险。</b></div>
+        <style>
+        .jvtab{padding:9px 18px;border-radius:9px 9px 0 0;color:var(--sub);cursor:pointer;font-weight:600;font-size:14px;user-select:none;display:flex;align-items:center;gap:6px}
+        .jvtab:hover{color:var(--txt)} .jvtab.on{color:var(--acc2);border-bottom:2px solid var(--acc)}
+        .jvsub{display:flex;align-items:center;gap:9px;padding:10px 11px;border-radius:9px;color:var(--sub);cursor:pointer;font-size:13.5px;font-weight:500;margin-bottom:3px;user-select:none}
+        .jvsub .ic{font-size:15px} .jvsub:hover{background:var(--card2);color:var(--txt)} .jvsub.on{background:var(--grad);color:#fff}
+        .jvbox{border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:600px;display:flex}
+        </style>
+        <!-- 顶部功能tab（只要这俩） -->
+        <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px">
+          <div class="jvtab on" data-fn="accounts" onclick="chFn('accounts')">👤 账号管理</div>
+          <div class="jvtab" data-fn="publish" onclick="chFn('publish')">🚀 一键发布</div>
+        </div>
 
-        <!-- 第一步：账号管理（多账号） -->
-        <div class="card" style="padding:16px 18px;margin-bottom:18px;border-color:var(--acc)">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-            <span class="tag" style="background:var(--grad);color:#fff;border:0">第一步</span>
-            <span style="font-weight:800;font-size:16px">账号管理</span>
-            <span id="chAccMeta" class="tag" style="margin-left:2px">0 个账号</span>
-            <button class="btn" style="margin-left:auto" id="chAddBtn" onclick="chAddAccount(this)">➕ 添加账号（扫码）</button>
+        <!-- ============ 账号管理 ============ -->
+        <div id="fn-accounts" class="jvfn">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+            <button class="btn" id="chAddBtn" onclick="chAddAccount(this)">＋ 添加账号</button>
+            <input id="chAccSearch" placeholder="🔍 昵称 / ID / 备注 / 分组" oninput="renderAccounts(chAccounts)" style="width:260px">
+            <span id="chAccMeta" class="tag">0 个账号</span>
+            <span style="color:var(--sub);font-size:12px;margin-left:auto">默认分组</span>
           </div>
-          <div id="chLoginStatus" style="color:var(--sub);font-size:12.5px;margin:6px 0 10px">点「添加账号」弹出浏览器→微信扫码登录一个视频号，重复添加多个。<b style="color:var(--warn)">同一个微信只能同时在线一个视频号（官方限制）。</b></div>
-          <input id="chAccSearch" placeholder="🔍 搜索昵称 / 备注 / 分组" oninput="renderAccounts(chAccounts)" style="width:100%;margin-bottom:10px">
+          <div id="chLoginStatus" style="color:var(--sub);font-size:12.5px;margin-bottom:12px">点「＋ 添加账号」→ 弹出浏览器 → 微信扫码登录一个视频号，重复添加多个。<b style="color:var(--warn)">同一个微信只能同时在线一个视频号（官方规则）。</b></div>
           <div id="chAccList" style="display:flex;flex-direction:column;gap:8px"></div>
         </div>
 
-        <!-- 选视频 -->
-        <div class="card" style="padding:16px 18px;margin-bottom:18px">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-            <span style="font-weight:800;font-size:16px">第二步 · 选视频</span>
-            <button class="btn ghost" style="padding:6px 12px" onclick="loadChVideos()">🔄 刷新下载库</button>
-            <span class="sp" style="margin-left:auto;color:var(--sub);font-size:12.5px" id="chVidMeta"></span>
-          </div>
-          <div id="chVideoGrid" class="posts" style="max-height:340px;overflow:auto"></div>
-        </div>
+        <!-- ============ 一键发布 ============ -->
+        <div id="fn-publish" class="jvfn" style="display:none">
+          <div class="jvbox">
+            <!-- 左子菜单 -->
+            <div style="width:150px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--line);padding:12px 8px">
+              <a class="jvsub on" data-sub="publish" onclick="chSub('publish')"><span class="ic">📹</span>批量发视频</a>
+              <a class="jvsub" data-sub="drafts" onclick="chSub('drafts')"><span class="ic">📁</span>本地草稿箱</a>
+              <a class="jvsub" data-sub="tasks" onclick="chSub('tasks')"><span class="ic">📋</span>任务记录</a>
+            </div>
+            <!-- 主区 -->
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+              <div style="flex:1;min-width:0;overflow:hidden">
 
-        <!-- 批量设置 + 待上传 -->
-        <div class="card" style="padding:16px 18px;margin-bottom:18px">
-          <div style="font-weight:800;font-size:16px;margin-bottom:12px">第三步 · 文案与发布设置</div>
-          <div style="font-size:13px;color:var(--sub);margin-bottom:6px">发到哪些账号（勾选，可多选）：<a onclick="chSelAllAcc()" style="color:var(--acc2);cursor:pointer;margin-left:6px">全选在线</a></div>
-          <div id="chAccPick" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-            <label style="font-size:13px;color:var(--sub)">话题标签（逗号分隔，套用所有）
-              <input id="chTags" placeholder="例如：影视解说,历史,爽文" style="width:100%;margin-top:5px"></label>
-            <label style="font-size:13px;color:var(--sub)">简介（套用所有，可空）
-              <input id="chDesc" placeholder="视频描述文案" style="width:100%;margin-top:5px"></label>
-          </div>
-          <div style="border-top:1px solid var(--line);margin:6px 0 12px"></div>
-          <div style="font-weight:700;font-size:14px;margin-bottom:10px">分发设置</div>
-          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-            <label style="font-size:13px;color:var(--sub)">分发模式
-              <select id="chDistribute" onchange="chPreview()" style="margin-left:6px">
-                <option value="multi">多对一（每个号都发全部视频）</option>
-                <option value="one2one">一对一（视频平摊到各号）</option>
-              </select></label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
-              <span class="switch"><input type="checkbox" id="chShuffle" onchange="chPreview()"><span class="slider"></span></span>打乱作品顺序</label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
-              <span class="switch"><input type="checkbox" id="chOriginal"><span class="slider"></span></span>声明原创</label>
-          </div>
-          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-            <label style="font-size:13px;color:var(--sub)">发布时间
-              <select id="chTimeMode" onchange="chTimeModeChange();chPreview()" style="margin-left:6px">
-                <option value="now">立即发布</option>
-                <option value="schedule">定时发布（推给视频号官方定时）</option>
-                <option value="local">本机定时（软件到点再发）</option>
-              </select></label>
-            <input type="datetime-local" id="chBaseTime" onchange="chPreview()" style="display:none">
-          </div>
-          <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-            <label style="font-size:13px;color:var(--sub)">作品间隔
-              <select id="chClipGap" onchange="chPreview()" style="margin-left:6px">
-                <option value="0">无间隔</option><option value="30">30 秒</option>
-                <option value="60">1 分钟</option><option value="300">5 分钟</option>
-                <option value="600">10 分钟</option><option value="1800">30 分钟</option>
-              </select></label>
-            <label style="font-size:13px;color:var(--sub)">账号间隔
-              <select id="chAcctGap" onchange="chPreview()" style="margin-left:6px">
-                <option value="0">无间隔</option><option value="30">30 秒</option>
-                <option value="60">1 分钟</option><option value="300">5 分钟</option>
-                <option value="600">10 分钟</option><option value="1800">30 分钟</option>
-              </select></label>
-            <span style="color:var(--dim);font-size:12px">间隔=错峰发，降风控/封号</span>
-          </div>
-          <div id="chPreviewBox" style="margin-top:12px"></div>
-        </div>
+                <!-- 批量发视频：中(上传+通用配置) + 右(账号配置) -->
+                <div class="jvview" id="jv-publish" style="display:flex;height:600px">
+                  <div style="flex:1;min-width:0;overflow:auto;padding:16px 18px">
+                    <div style="border:2px dashed var(--line);border-radius:12px;padding:18px;text-align:center;cursor:pointer;margin-bottom:12px" onclick="loadChVideos()">
+                      <div style="font-size:28px">▶</div>
+                      <div style="font-weight:700;margin-top:4px">点这里从下载库选视频</div>
+                      <div style="color:var(--dim);font-size:12px;margin-top:3px">支持 MP4，从你下载的视频里挑</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                      <span style="font-weight:700;font-size:13px">下载库</span>
+                      <button class="btn ghost" style="padding:5px 10px" onclick="loadChVideos()">🔄 刷新</button>
+                      <span style="margin-left:auto;color:var(--sub);font-size:12px" id="chVidMeta"></span>
+                    </div>
+                    <div id="chVideoGrid" class="posts" style="max-height:220px;overflow:auto;margin-bottom:16px"></div>
 
-        <div class="ptoolbar" style="flex-wrap:wrap">
-          <span style="font-weight:700">待上传 <span id="chPickCount">0</span> 条</span>
-          <button class="btn ghost" style="padding:7px 12px" onclick="chBatchTitle()">✏ 批量标题</button>
-          <button class="btn ghost" style="padding:7px 12px" onclick="chBatchCopy()">⧉ 批量复制</button>
-          <button class="btn ghost" style="padding:7px 12px" onclick="chSaveDraft()">💾 保存草稿</button>
-          <button class="btn ghost" style="padding:7px 12px" onclick="chOpenDrafts()">📁 草稿箱</button>
-          <button class="btn ghost" style="padding:7px 12px" onclick="chPick=[];renderChVideoGrid();renderPickList();chPreview()">🗑 清空</button>
-          <button class="btn" id="chUploadBtn" disabled onclick="startUpload(this)" style="margin-left:auto">📤 开始上传</button>
-        </div>
-        <div id="chPickList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:22px"></div>
+                    <div style="font-weight:800;font-size:15px;margin-bottom:10px">通用配置</div>
+                    <label style="font-size:13px;color:var(--sub);display:block;margin-bottom:10px">通用简介
+                      <input id="chDesc" placeholder="视频描述文案（套用所有）" style="width:100%;margin-top:5px"></label>
+                    <label style="font-size:13px;color:var(--sub);display:block;margin-bottom:4px">标签 / 话题（逗号分隔，套用所有）
+                      <input id="chTags" placeholder="例如：影视解说,历史,爽文" style="width:100%;margin-top:5px"></label>
+                    <div style="color:var(--dim);font-size:12px;margin-bottom:14px">不要在简介里带 #话题，用这个标签框</div>
 
-        <!-- 上传队列 -->
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-          <span style="font-weight:800;font-size:16px">上传队列</span>
-          <span class="tag load" id="upRunning">进行 0</span>
-          <span class="tag ok" id="upDone">完成 0</span>
-          <span class="tag fail" id="upFailed">失败 0</span>
-          <button class="btn ghost" id="upRetryBtn" onclick="chRetry(this)" style="margin-left:auto;display:none">🔁 重试失败</button>
-          <button class="btn ghost" onclick="chClear()">🧹 清除完成/失败</button>
+                    <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+                      <label style="font-size:13px;color:var(--sub)">发布时间
+                        <select id="chTimeMode" onchange="chTimeModeChange();chPreview()" style="margin-left:6px">
+                          <option value="now">立即发布</option>
+                          <option value="schedule">定时发布</option>
+                          <option value="local">本机定时</option>
+                        </select></label>
+                      <input type="datetime-local" id="chBaseTime" onchange="chPreview()" style="display:none">
+                    </div>
+                    <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+                      <label style="font-size:13px;color:var(--sub)">作品间隔
+                        <select id="chClipGap" onchange="chPreview()" style="margin-left:6px">
+                          <option value="0">无间隔</option><option value="30">30 秒</option><option value="60">1 分钟</option>
+                          <option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option>
+                        </select></label>
+                      <label style="font-size:13px;color:var(--sub)">账号间隔
+                        <select id="chAcctGap" onchange="chPreview()" style="margin-left:6px">
+                          <option value="0">无间隔</option><option value="30">30 秒</option><option value="60">1 分钟</option>
+                          <option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option>
+                        </select></label>
+                    </div>
+                    <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+                      <label style="font-size:13px;color:var(--sub)">分发模式
+                        <select id="chDistribute" onchange="chPreview()" style="margin-left:6px">
+                          <option value="multi">多对一（每号发全部）</option>
+                          <option value="one2one">一对一（视频平摊）</option>
+                        </select></label>
+                      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)">
+                        <span class="switch"><input type="checkbox" id="chShuffle" onchange="chPreview()"><span class="slider"></span></span>打乱顺序</label>
+                      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)">
+                        <span class="switch"><input type="checkbox" id="chOriginal"><span class="slider"></span></span>声明原创</label>
+                    </div>
+                    <div id="chPreviewBox"></div>
+                    <div style="border-top:1px solid var(--line);margin:14px 0 10px"></div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                      <span style="font-weight:700;font-size:13px">待发 <span id="chPickCount">0</span> 条</span>
+                      <button class="btn ghost" style="padding:5px 10px" onclick="chBatchTitle()">✏ 批量标题</button>
+                      <button class="btn ghost" style="padding:5px 10px" onclick="chBatchCopy()">⧉ 批量复制</button>
+                      <button class="btn ghost" style="padding:5px 10px" onclick="chPick=[];renderChVideoGrid();renderPickList();chPreview()">🗑 清空作品</button>
+                    </div>
+                    <div id="chPickList" style="display:flex;flex-direction:column;gap:8px;margin-top:8px"></div>
+                  </div>
+                  <!-- 右：平台和账号配置 -->
+                  <div style="width:280px;flex-shrink:0;border-left:1px solid var(--line);padding:16px;overflow:auto">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                      <span style="font-weight:800;font-size:15px">平台和账号配置</span>
+                      <a onclick="chSelAllAcc()" style="color:var(--acc2);cursor:pointer;font-size:12px;margin-left:auto">全选在线</a>
+                    </div>
+                    <div style="color:var(--sub);font-size:12px;margin-bottom:10px">勾选要发到的账号（可多选）</div>
+                    <div id="chAccPick" style="display:flex;flex-direction:column;gap:8px"></div>
+                    <button class="btn ghost" style="width:100%;margin-top:12px" onclick="chFn('accounts')">＋ 去账号管理添加</button>
+                  </div>
+                </div>
+
+                <!-- 本地草稿箱 -->
+                <div class="jvview" id="jv-drafts" style="display:none;padding:16px 18px;height:600px;overflow:auto">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                    <span style="font-weight:800;font-size:16px">本地草稿箱</span>
+                    <button class="btn" style="margin-left:auto" onclick="chSaveDraft().then(loadDraftList)">💾 把当前配置存为草稿</button>
+                  </div>
+                  <div id="chDraftList" style="display:flex;flex-direction:column;gap:8px"></div>
+                </div>
+
+                <!-- 任务记录 -->
+                <div class="jvview" id="jv-tasks" style="display:none;padding:16px 18px;height:600px;overflow:auto">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+                    <span style="font-weight:800;font-size:16px">任务记录</span>
+                    <span class="tag load" id="upRunning">进行 0</span>
+                    <span class="tag ok" id="upDone">完成 0</span>
+                    <span class="tag fail" id="upFailed">失败 0</span>
+                    <button class="btn ghost" id="upRetryBtn" onclick="chRetry(this)" style="margin-left:auto;display:none">🔁 重试失败</button>
+                    <button class="btn ghost" onclick="chClear()">🧹 清除完成/失败</button>
+                  </div>
+                  <div id="upList" style="display:flex;flex-direction:column;gap:8px"></div>
+                </div>
+
+              </div>
+              <!-- 底部操作栏 -->
+              <div style="border-top:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;align-items:center;background:var(--sidebar)">
+                <button class="btn ghost" onclick="chPick=[];chAccSel.clear();renderChVideoGrid();renderPickList();renderAccPick();chPreview()">清空所有</button>
+                <button class="btn ghost" onclick="chSaveDraft()">存为草稿</button>
+                <span id="jvSummary" style="color:var(--dim);font-size:12px;margin-left:6px"></span>
+                <button class="btn" id="chUploadBtn" disabled onclick="startUpload(this)" style="margin-left:auto">🚀 一键分发</button>
+              </div>
+            </div>
+          </div>
         </div>
-        <div id="upList" style="display:flex;flex-direction:column;gap:8px"></div>
       </section>
 
       <!-- 设置 -->
@@ -1109,7 +1158,49 @@ async function ddClear(){ try{ await api('/api/dedup/clear','POST'); loadDedupTa
 
 /* ---- 视频号发布 ---- */
 let chVideos=[], chPick=[], chTimer=null;
-function openChannels(){ loadChVideos(); startChannelsPoll(); }
+function openChannels(){ chFn('accounts'); loadChVideos(); startChannelsPoll(); }
+function chFn(fn){
+  document.querySelectorAll('#page-channels .jvtab').forEach(t=>t.classList.toggle('on',t.dataset.fn===fn));
+  document.getElementById('fn-accounts').style.display=fn==='accounts'?'block':'none';
+  document.getElementById('fn-publish').style.display=fn==='publish'?'block':'none';
+  if(fn==='publish'){ if(!chVideos.length) loadChVideos(); chPreview(); }
+}
+function chSub(sub){
+  document.querySelectorAll('#fn-publish .jvsub').forEach(a=>a.classList.toggle('on',a.dataset.sub===sub));
+  document.querySelectorAll('#fn-publish .jvview').forEach(v=>v.style.display='none');
+  const el=document.getElementById('jv-'+sub); if(el) el.style.display=sub==='publish'?'flex':'block';
+  if(sub==='drafts') loadDraftList();
+}
+async function loadDraftList(){
+  const box=document.getElementById('chDraftList'); if(!box) return;
+  try{
+    const d=await api('/api/channels/pubdrafts');
+    box.innerHTML=(d.drafts&&d.drafts.length)? d.drafts.map(x=>`
+      <div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📄 ${esc(x.name)}</div>
+          <div style="color:var(--sub);font-size:12px">${x.count} 条作品 · ${esc(x.at)}</div>
+        </div>
+        <button class="btn ghost" style="padding:6px 12px" onclick='chLoadDraft(${JSON.stringify(x.name)})'>载入</button>
+        <button class="x" onclick='chDelDraft(${JSON.stringify(x.name)})'>✕</button>
+      </div>`).join('') : emptyBox('📁','草稿箱是空的','配好视频和设置后，点「存为草稿」保存');
+  }catch(e){ box.innerHTML=''; }
+}
+async function chLoadDraft(name){
+  try{
+    const r=await api('/api/channels/pubdrafts/'+encodeURIComponent(name)); const x=r.data||{};
+    chPick=(x.picks||x.items||[]).map(p=>({path:p.video_path||p.path,name:p.name||(p.video_path||'').split(/[\\/]/).pop(),title:p.title||''}));
+    chAccSel=new Set(x.accs||[]);
+    const set=(id,v)=>{const el=document.getElementById(id);if(el&&v!=null)el.value=v;};
+    set('chTags',x.tags); set('chDesc',x.desc); set('chDistribute',x.distribute); set('chTimeMode',x.timeMode);
+    set('chBaseTime',x.baseTime); set('chClipGap',x.clipGap); set('chAcctGap',x.acctGap);
+    if(x.original!=null)document.getElementById('chOriginal').checked=x.original;
+    if(x.shuffle!=null)document.getElementById('chShuffle').checked=x.shuffle;
+    chTimeModeChange(); renderChVideoGrid(); renderPickList(); renderAccPick(); chPreview();
+    chSub('publish'); toast('已载入草稿：'+name);
+  }catch(e){ uiAlert(e.message); }
+}
+async function chDelDraft(name){ if(!await uiConfirm('删除草稿「'+name+'」？','删除草稿'))return; await api('/api/channels/pubdrafts/'+encodeURIComponent(name),'DELETE'); loadDraftList(); }
 
 async function loadChVideos(){
   const grid=document.getElementById('chVideoGrid');
