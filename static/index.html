@@ -472,18 +472,16 @@
         <h2 class="hero">视频号<span class="g">发布</span></h2>
         <div class="lead">把下载库里的视频批量发到微信视频号。走系统浏览器自动化，需先扫码登录。<b style="color:var(--warn)">请只发你有版权/已授权/做过二创的内容，纯搬运有封号风险。</b></div>
 
-        <!-- 登录 -->
-        <div class="card" id="chLoginCard" style="padding:16px 18px;margin-bottom:18px;border-color:var(--acc)">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <!-- 第一步：账号管理（多账号） -->
+        <div class="card" style="padding:16px 18px;margin-bottom:18px;border-color:var(--acc)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
             <span class="tag" style="background:var(--grad);color:#fff;border:0">第一步</span>
-            <span style="font-weight:800;font-size:16px">视频号登录</span>
-            <span id="chBadge" class="tag">未登录</span>
+            <span style="font-weight:800;font-size:16px">账号管理</span>
+            <span id="chAccMeta" class="tag" style="margin-left:2px">0 个账号</span>
+            <button class="btn" style="margin-left:auto" id="chAddBtn" onclick="chAddAccount(this)">➕ 添加账号（扫码）</button>
           </div>
-          <div id="chLoginStatus" style="color:var(--sub);font-size:13px;margin-top:8px">点「扫码登录」会弹出一个浏览器窗口，用微信扫码登录视频号助手，登录一次可用一段时间。</div>
-          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn" id="chLoginBtn" onclick="chLogin(this)">📱 扫码登录</button>
-            <button class="btn ghost" id="chLogoutBtn" onclick="chLogout()" style="display:none">退出登录</button>
-          </div>
+          <div id="chLoginStatus" style="color:var(--sub);font-size:12.5px;margin:6px 0 10px">点「添加账号」弹出浏览器→微信扫码登录一个视频号，重复添加多个。<b style="color:var(--warn)">同一个微信只能同时在线一个视频号（官方限制）。</b></div>
+          <div id="chAccList" style="display:flex;flex-direction:column;gap:8px"></div>
         </div>
 
         <!-- 选视频 -->
@@ -499,6 +497,8 @@
         <!-- 批量设置 + 待上传 -->
         <div class="card" style="padding:16px 18px;margin-bottom:18px">
           <div style="font-weight:800;font-size:16px;margin-bottom:12px">第三步 · 文案与发布设置</div>
+          <div style="font-size:13px;color:var(--sub);margin-bottom:6px">发到哪些账号（勾选，可多选）：<a onclick="chSelAllAcc()" style="color:var(--acc2);cursor:pointer;margin-left:6px">全选在线</a></div>
+          <div id="chAccPick" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
             <label style="font-size:13px;color:var(--sub)">话题标签（逗号分隔，套用所有）
               <input id="chTags" placeholder="例如：影视解说,历史,爽文" style="width:100%;margin-top:5px"></label>
@@ -1114,42 +1114,69 @@ function renderPickList(){
 function removePick(i){ chPick.splice(i,1); renderChVideoGrid(); renderPickList(); }
 
 async function startUpload(btn){
-  if(!chPick.length) return;
-  if(!curStatus){ }
+  if(!chPick.length){ uiAlert('先在上面选视频'); return; }
+  if(!chAccSel.size){ uiAlert('先勾选要发到哪些账号'); return; }
   const tagsStr=document.getElementById('chTags').value.trim();
   const tags=tagsStr?tagsStr.split(/[,，\s]+/).filter(Boolean):[];
   const desc=document.getElementById('chDesc').value.trim();
   const original=document.getElementById('chOriginal').checked;
-  const schedRaw=document.getElementById('chSchedule').value;   // "YYYY-MM-DDTHH:MM"
+  const schedRaw=document.getElementById('chSchedule').value;
   const schedule=schedRaw?schedRaw.replace('T',' '):'';
   const items=chPick.map(p=>({video_path:p.path, title:p.title||p.name, tags, desc, original, schedule}));
   const old=btn.innerHTML; btn.disabled=true; btn.textContent='入队中…';
   try{
-    const d=await api('/api/channels/upload','POST',{items});
-    toast('已加入上传队列 '+d.queued+' 条，浏览器会自动逐条发布');
-    chPick=[]; renderChVideoGrid(); renderPickList();
-    loadUploadTasks();
+    const d=await api('/api/channels/upload','POST',{items, account_ids:[...chAccSel]});
+    toast(`已入队 ${d.queued} 条（${d.accounts} 个账号 × ${chPick.length} 视频），浏览器自动逐条发`);
+    chPick=[]; renderChVideoGrid(); renderPickList(); refreshChannels();
   }catch(e){ uiAlert(e.message); }
   btn.disabled=false; btn.innerHTML=old;
 }
 
-async function chLogin(btn){
-  const old=btn.innerHTML; btn.disabled=true; btn.textContent='请在弹出的浏览器里扫码…';
-  try{ await api('/api/channels/login','POST'); toast('已弹出浏览器，请用微信扫码'); }
+/* ---- 多账号管理 ---- */
+let chAccounts=[], chAccSel=new Set();
+async function chAddAccount(btn){
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='请在弹出浏览器里扫码…';
+  try{ await api('/api/channels/account/add','POST',{}); toast('已弹出浏览器，用微信扫码登录一个视频号'); }
   catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; return; }
-  // 轮询等登录完成（最多 4 分钟）
   let n=0; const iv=setInterval(async()=>{
-    n++; let s; try{ s=await api('/api/channels/status'); }catch(e){ return; }
+    n++; let s; try{ s=await api('/api/channels/accounts'); }catch(e){ return; }
     document.getElementById('chLoginStatus').textContent=s.login_status||'等待扫码…';
-    if(s.logged_in){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; toast('视频号登录成功！'); renderChannels(s); }
-    else if(!s.login_running && n>2){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; renderChannels(s); }
+    renderAccounts(s.accounts||[]);
+    if(!s.login_running && n>2){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; refreshChannels(); }
     if(n>80){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; }
   },3000);
 }
-async function chLogout(){
-  if(!await uiConfirm('退出视频号登录？','退出登录')) return;
-  await api('/api/channels/logout','POST'); toast('已退出视频号登录'); refreshChannels();
+async function chRelogin(id){ try{ await api('/api/channels/account/'+id+'/relogin','POST'); toast('已弹出浏览器，重新扫码（同微信只能在线一个号）'); startChannelsPoll(); }catch(e){ uiAlert(e.message); } }
+async function chDelAccount(id){ if(!await uiConfirm('删除这个账号？（清掉本地登录信息，不影响你的视频号本身）','删除账号'))return; await api('/api/channels/account/'+id,'DELETE'); refreshChannels(); }
+async function chRenameAccount(id, cur){ const v=await uiPrompt('账号备注名：',{def:cur}); if(v==null)return; await api('/api/channels/account/'+id+'/edit','POST',{name:v}); refreshChannels(); }
+
+function renderAccounts(accs){
+  chAccounts=accs;
+  const on=accs.filter(a=>a.online).length;
+  const m=document.getElementById('chAccMeta'); if(m){ m.textContent=`${accs.length} 个账号 · ${on} 在线`; m.className='tag '+(on?'ok':''); }
+  document.getElementById('chAccList').innerHTML=accs.length? accs.map(a=>`
+    <div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
+      <span style="width:9px;height:9px;border-radius:50%;flex-shrink:0;background:${a.online?'var(--ok)':'var(--dim)'};${a.online?'box-shadow:0 0 6px var(--ok)':''}"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.name)}${a.note?` <span style="color:var(--dim);font-size:12px">(${esc(a.note)})</span>`:''}</div>
+        <div style="color:var(--sub);font-size:12px">${a.online?'🟢 在线':'⚪ 离线（需重新扫码）'} · ${esc(a.group||'默认分组')}${a.added?' · '+esc(a.added):''}</div>
+      </div>
+      <button class="btn ghost" style="padding:6px 10px" onclick="chRelogin('${a.id}')">${a.online?'重登':'扫码登录'}</button>
+      <button class="btn ghost" style="padding:6px 10px" onclick='chRenameAccount("${a.id}",${JSON.stringify(a.name)})'>改名</button>
+      <button class="x" title="删除" onclick="chDelAccount('${a.id}')">✕</button>
+    </div>`).join('') : emptyBox('👤','还没有账号','点右上角「➕ 添加账号」，扫码登录你的视频号');
+  renderAccPick();
 }
+function renderAccPick(){
+  const box=document.getElementById('chAccPick'); if(!box) return;
+  const online=chAccounts.filter(a=>a.online);
+  [...chAccSel].forEach(id=>{ if(!online.find(a=>a.id===id)) chAccSel.delete(id); });
+  box.innerHTML=online.length? online.map(a=>
+    `<button class="tab ${chAccSel.has(a.id)?'on':''}" style="padding:6px 12px" onclick="toggleAccSel('${a.id}')">${esc(a.name)}</button>`
+  ).join('') : '<span style="color:var(--dim);font-size:12px">没有在线账号——先在上面添加/登录</span>';
+}
+function toggleAccSel(id){ if(chAccSel.has(id))chAccSel.delete(id); else chAccSel.add(id); renderAccPick(); }
+function chSelAllAcc(){ chAccounts.filter(a=>a.online).forEach(a=>chAccSel.add(a.id)); renderAccPick(); }
 
 const UP_ST={queued:['⏳','排队',''],running:['📤','上传中','load'],done:['✅','完成','ok'],failed:['❌','失败','fail']};
 function upRow(t){
@@ -1157,26 +1184,21 @@ function upRow(t){
   return `<div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
     <span style="flex-shrink:0">${ic}</span>
     <div style="flex:1;min-width:0">
-      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
+      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.account_name?`<span style="color:var(--acc2)">[${esc(t.account_name)}]</span> `:''}${esc(t.title)}</div>
       <div style="color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.stage||'')}${t.err?` · <span style="color:var(--red)">${esc(t.err)}</span>`:''} · ${esc(t.ts)}</div>
     </div>
     <span class="tag ${cls}" style="flex-shrink:0">${label}</span>
   </div>`;
 }
 function renderChannels(s){
-  const li=s.logged_in;
-  const b=document.getElementById('chBadge');
-  if(b){ b.textContent=li?'已登录':'未登录'; b.className='tag '+(li?'ok':''); }
-  const lo=document.getElementById('chLogoutBtn'); if(lo) lo.style.display=li?'inline-block':'none';
-  if(!document.getElementById('chLoginBtn').disabled && s.login_status)
-    document.getElementById('chLoginStatus').textContent=s.login_status;
-  // 队列
+  renderAccounts(s.accounts||[]);
+  if(s.login_running && s.login_status) document.getElementById('chLoginStatus').textContent=s.login_status;
   const set=(id,txt)=>{const el=document.getElementById(id); if(el) el.textContent=txt;};
   set('upRunning','进行 '+((s.counts?.queued||0)+(s.counts?.running||0)));
   set('upDone','完成 '+(s.counts?.done||0)); set('upFailed','失败 '+(s.counts?.failed||0));
   const rb=document.getElementById('upRetryBtn'); if(rb) rb.style.display=(s.counts?.failed)?'inline-block':'none';
   document.getElementById('upList').innerHTML=(s.tasks&&s.tasks.length)?s.tasks.map(upRow).join('')
-    :emptyBox('📤','还没有上传任务','选好视频、填好文案，点「开始上传」');
+    :emptyBox('📤','还没有上传任务','选好视频、勾好账号、填好文案，点「开始上传」');
 }
 async function refreshChannels(){ try{ renderChannels(await api('/api/channels/status')); }catch(e){} }
 async function loadUploadTasks(){ refreshChannels(); }

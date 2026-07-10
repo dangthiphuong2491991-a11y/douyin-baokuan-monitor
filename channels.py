@@ -60,16 +60,27 @@ async def login(state_file: Path, timeout: int = 240, on_status=None) -> bool:
                     break
             except Exception:
                 pass
+        nickname = ""
         if ok:
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(1800)
             try:
                 await ctx.storage_state(path=str(state_file))
             except Exception as e:
                 st(f"保存登录态失败：{e}")
                 ok = False
+            for sel in ('.finder-nickname', '.account-info-nickname', 'span.finder-nickname',
+                        'div.finder-info-nickname', '.header-account-name', '.name-wrap .nickname'):
+                try:
+                    loc = page.locator(sel)
+                    if await loc.count():
+                        nickname = (await loc.first.inner_text()).strip()
+                        if nickname:
+                            break
+                except Exception:
+                    pass
         await browser.close()
         st("登录成功" if ok else "超时未检测到登录")
-        return ok
+        return ok, nickname
 
 
 async def check_login(state_file: Path) -> bool:

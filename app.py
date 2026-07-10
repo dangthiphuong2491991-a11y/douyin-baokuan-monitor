@@ -80,8 +80,10 @@ SNAPS_FILE = DATA / "snaps.json"
 SNAPS = _load(SNAPS_FILE, {})
 
 # 视频号发布
-CH_STATE_FILE = DATA / "channels_state.json"   # Playwright storage_state（登录 cookie）
-CH_LOGIN = {"running": False, "status": ""}
+CH_STATE_FILE = DATA / "channels_state.json"   # 老单账号 cookie（迁移用）
+CH_DIR = DATA / "channels"                     # 多账号：每个账号一个 {id}.json cookie
+CH_DIR.mkdir(exist_ok=True)
+CH_LOGIN = {"running": False, "status": "", "for": ""}   # for=正在登录的账号id
 UPLOAD_TASKS = {}
 UPLOAD_QUEUE: asyncio.Queue = asyncio.Queue()
 _up_seq = 0
@@ -105,10 +107,20 @@ def _migrate_config():
         if "platform" not in b:
             b["platform"] = "douyin"
             changed = True
-    for k, v in (("mix_follows", []), ("takeoff_vel", 3000), ("digest_hour", 9)):
+    for k, v in (("mix_follows", []), ("takeoff_vel", 3000), ("digest_hour", 9), ("ch_accounts", [])):
         if k not in config:
             config[k] = v
             changed = True
+    # 老单账号 cookie → 迁移成第一个多账号
+    if CH_STATE_FILE.exists() and not config.get("ch_accounts"):
+        aid = "a1"
+        try:
+            CH_STATE_FILE.replace(CH_DIR / f"{aid}.json")
+        except Exception:
+            pass
+        config["ch_accounts"] = [{"id": aid, "name": "视频号1", "note": "", "group": "默认分组",
+                                  "added": datetime.now().strftime("%Y-%m-%d %H:%M")}]
+        changed = True
     if changed:
         _save(CONFIG_FILE, config)
 
@@ -1503,16 +1515,49 @@ def api_import_bloggers(body: ImportBody):
     return {"ok": True, "added": added, "total": len(config["bloggers"]), "mode": body.mode}
 
 
-# ==================== 视频号发布（Playwright 驱动系统 Edge/Chrome） ====================
+# ============ 视频号发布：多账号批量登录 + 批量发布（仿小V猫） ============
+def _ch_state(aid: str) -> Path:
+    return CH_DIR / f"{aid}.json"
+
+
+def ch_online(aid: str) -> bool:
+    return _ch_state(aid).exists()
+
+
+def _ch_accounts() -> list:
+    return config.setdefault("ch_accounts", [])
+
+
+def _ch_account(aid: str):
+    return next((a for a in _ch_accounts() if a["id"] == aid), None)
+
+
 def ch_logged_in() -> bool:
-    return CH_STATE_FILE.exists()
+    return any(ch_online(a["id"]) for a in _ch_accounts())
 
 
-async def _ch_login_bg():
+def _accs_with_online() -> list:
+    return [{**a, "online": ch_online(a["id"])} for a in _ch_accounts()]
+
+
+async def _ch_login_bg(aid: str, is_new: bool, note: str, group: str):
+    CH_LOGIN["for"] = aid
     CH_LOGIN["running"] = True
+    CH_LOGIN["status"] = "启动中…"
     try:
-        await channels.login(CH_STATE_FILE, timeout=240,
-                             on_status=lambda m: CH_LOGIN.update(status=m))
+        ok, nickname = await channels.login(_ch_state(aid), timeout=240,
+                                            on_status=lambda m: CH_LOGIN.update(status=m))
+        if ok and is_new:
+            n = len(_ch_accounts()) + 1
+            _ch_accounts().append({"id": aid, "name": nickname or f"视频号{n}", "note": note,
+                                   "group": group or "默认分组",
+                                   "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
+            _save(CONFIG_FILE, config)
+        elif ok and nickname:
+            acc = _ch_account(aid)
+            if acc and not acc.get("name_locked"):
+                acc["name"] = nickname
+                _save(CONFIG_FILE, config)
     except Exception as e:
         CH_LOGIN["status"] = f"登录出错：{str(e)[:120]}"
         log_err(f"视频号登录出错: {e}")
@@ -1520,13 +1565,66 @@ async def _ch_login_bg():
         CH_LOGIN["running"] = False
 
 
-@app.post("/api/channels/login")
-async def api_channels_login():
+class ChAddBody(BaseModel):
+    note: str = ""
+    group: str = "默认分组"
+
+
+@app.post("/api/channels/account/add")
+async def api_ch_add(body: ChAddBody):
     if CH_LOGIN["running"]:
         return {"ok": True, "already": True}
-    CH_LOGIN["status"] = "启动中…"
-    asyncio.create_task(_ch_login_bg())
+    aid = os.urandom(4).hex()
+    asyncio.create_task(_ch_login_bg(aid, True, body.note, body.group))
+    return {"ok": True, "id": aid}
+
+
+@app.post("/api/channels/account/{aid}/relogin")
+async def api_ch_relogin(aid: str):
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    if CH_LOGIN["running"]:
+        return {"ok": True, "already": True}
+    asyncio.create_task(_ch_login_bg(aid, False, "", ""))
     return {"ok": True}
+
+
+@app.delete("/api/channels/account/{aid}")
+def api_ch_del(aid: str):
+    config["ch_accounts"] = [a for a in _ch_accounts() if a["id"] != aid]
+    _save(CONFIG_FILE, config)
+    try:
+        _ch_state(aid).unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+class ChEditBody(BaseModel):
+    name: str = None
+    note: str = None
+    group: str = None
+
+
+@app.post("/api/channels/account/{aid}/edit")
+def api_ch_edit(aid: str, body: ChEditBody):
+    a = _ch_account(aid)
+    if not a:
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    if body.name is not None:
+        a["name"], a["name_locked"] = body.name, True
+    if body.note is not None:
+        a["note"] = body.note
+    if body.group is not None:
+        a["group"] = body.group
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
+
+
+@app.get("/api/channels/accounts")
+def api_ch_accounts():
+    return {"accounts": _accs_with_online(), "login_running": CH_LOGIN["running"],
+            "login_for": CH_LOGIN.get("for", ""), "login_status": CH_LOGIN["status"]}
 
 
 @app.get("/api/channels/status")
@@ -1536,17 +1634,9 @@ def api_channels_status():
         counts[t["status"]] = counts.get(t["status"], 0) + 1
     tasks = list(UPLOAD_TASKS.values())[-200:]
     tasks.reverse()
-    return {"logged_in": ch_logged_in(), "login_running": CH_LOGIN["running"],
+    return {"logged_in": ch_logged_in(), "accounts": _accs_with_online(),
+            "login_running": CH_LOGIN["running"], "login_for": CH_LOGIN.get("for", ""),
             "login_status": CH_LOGIN["status"], "counts": counts, "tasks": tasks}
-
-
-@app.post("/api/channels/logout")
-def api_channels_logout():
-    try:
-        CH_STATE_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
-    return {"ok": True}
 
 
 @app.get("/api/channels/videos")
@@ -1583,27 +1673,34 @@ class UploadItem(BaseModel):
 
 class UploadBody(BaseModel):
     items: list[UploadItem] = []
+    account_ids: list[str] = []      # 发到哪些账号（空=所有在线账号）
 
 
 @app.post("/api/channels/upload")
 def api_channels_upload(body: UploadBody):
-    if not ch_logged_in():
-        return JSONResponse({"error": "请先登录视频号"}, status_code=400)
+    online = [a["id"] for a in _ch_accounts() if ch_online(a["id"])]
+    targets = [a for a in body.account_ids if a in online] if body.account_ids else online
+    if not targets:
+        return JSONResponse({"error": "没有在线的视频号账号，请先添加/登录账号"}, status_code=400)
     global _up_seq
     n = 0
-    for it in body.items:
-        if not Path(it.video_path).exists():
-            continue
-        _up_seq += 1
-        tid = f"u{_up_seq}"
-        UPLOAD_TASKS[tid] = {"id": tid, "title": it.title or Path(it.video_path).stem,
-                             "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
-                             "cover_path": it.cover_path, "original": it.original,
-                             "schedule": it.schedule, "status": "queued", "stage": "", "err": "",
-                             "ts": datetime.now().strftime("%H:%M:%S")}
-        UPLOAD_QUEUE.put_nowait(tid)
-        n += 1
-    return {"ok": True, "queued": n}
+    for aid in targets:
+        acc = _ch_account(aid)
+        aname = acc["name"] if acc else aid
+        for it in body.items:
+            if not Path(it.video_path).exists():
+                continue
+            _up_seq += 1
+            tid = f"u{_up_seq}"
+            UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": aname,
+                                 "title": it.title or Path(it.video_path).stem,
+                                 "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
+                                 "cover_path": it.cover_path, "original": it.original,
+                                 "schedule": it.schedule, "status": "queued", "stage": "", "err": "",
+                                 "ts": datetime.now().strftime("%H:%M:%S")}
+            UPLOAD_QUEUE.put_nowait(tid)
+            n += 1
+    return {"ok": True, "queued": n, "accounts": len(targets)}
 
 
 @app.post("/api/channels/tasks/retry_failed")
@@ -1630,8 +1727,9 @@ async def _upload_worker():
         t = UPLOAD_TASKS.get(tid)
         if not t or t["status"] != "queued":
             continue
-        if not ch_logged_in():
-            t.update(status="failed", err="未登录视频号")
+        aid = t.get("account_id")
+        if not aid or not ch_online(aid):
+            t.update(status="failed", err="该账号未登录")
             continue
         t["status"] = "running"
         sched = None
@@ -1642,7 +1740,7 @@ async def _upload_worker():
                 sched = None
         try:
             ok, msg = await channels.upload(
-                CH_STATE_FILE, t["video_path"], title=t["title"], tags=t["tags"],
+                _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
                 desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
                 schedule=sched, headless=False, err_dir=DATA,
                 on_status=lambda m: t.update(stage=m))
