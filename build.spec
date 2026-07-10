@@ -48,5 +48,5 @@ exe = EXE(
     console=False,           # 无黑窗
     disable_windowed_traceback=False,
     argv_emulation=False,
-    icon=None,
+    icon='app.ico',
 )
