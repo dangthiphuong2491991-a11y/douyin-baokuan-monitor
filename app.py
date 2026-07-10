@@ -21,6 +21,7 @@ from pydantic import BaseModel
 import platforms
 from platforms import get_adapter, PLATFORM_LIST
 import channels
+import dedup
 
 
 async def resolve_aweme_id(text: str, platform: str = "douyin"):
@@ -83,6 +84,11 @@ CH_LOGIN = {"running": False, "status": ""}
 UPLOAD_TASKS = {}
 UPLOAD_QUEUE: asyncio.Queue = asyncio.Queue()
 _up_seq = 0
+
+# 视频去重
+DEDUP_TASKS = {}
+DEDUP_QUEUE: asyncio.Queue = asyncio.Queue()
+_dd_seq = 0
 
 
 def _migrate_config():
@@ -621,6 +627,7 @@ async def _startup():
     for _ in range(2):                       # 两个下载工人：并发温和，防限流
         asyncio.create_task(_dl_worker())
     asyncio.create_task(_upload_worker())    # 视频号上传：单工人串行，防风控
+    asyncio.create_task(_dedup_worker())     # 视频去重：单工人（ffmpeg 吃 CPU）
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -664,6 +671,8 @@ def api_status():
                   for k in ("queued", "running", "done", "failed")},
         "uploads": {k: sum(1 for t in UPLOAD_TASKS.values() if t["status"] == k)
                     for k in ("queued", "running", "done", "failed")},
+        "dedups": {k: sum(1 for t in DEDUP_TASKS.values() if t["status"] == k)
+                   for k in ("queued", "running", "done", "failed")},
         "ch_logged_in": ch_logged_in(),
         "takeoffs": state.get("takeoffs", [])[:20],
         "last_digest": state.get("last_digest"),
@@ -1640,6 +1649,90 @@ async def _upload_worker():
         except Exception as e:
             t.update(status="failed", err=str(e)[:160])
         await asyncio.sleep(3)   # 每条之间多停一会，降低风控/封号概率
+
+
+# ==================== 视频去重处理（ffmpeg 滤镜链） ====================
+def _dedup_out_dir() -> Path:
+    d = get_dl() / "去重导出"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class DedupBody(BaseModel):
+    video_paths: list[str] = []
+    options: dict = {}
+
+
+@app.post("/api/dedup")
+def api_dedup(body: DedupBody):
+    global _dd_seq
+    n = 0
+    for vp in body.video_paths:
+        if not Path(vp).exists():
+            continue
+        _dd_seq += 1
+        tid = f"d{_dd_seq}"
+        DEDUP_TASKS[tid] = {"id": tid, "name": Path(vp).name, "video_path": vp,
+                            "options": body.options or {}, "status": "queued", "stage": "",
+                            "err": "", "out": "", "ts": datetime.now().strftime("%H:%M:%S")}
+        DEDUP_QUEUE.put_nowait(tid)
+        n += 1
+    return {"ok": True, "queued": n, "out_dir": str(_dedup_out_dir())}
+
+
+@app.get("/api/dedup/tasks")
+def api_dedup_tasks():
+    counts = {k: 0 for k in ("queued", "running", "done", "failed")}
+    for t in DEDUP_TASKS.values():
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    tasks = list(DEDUP_TASKS.values())[-200:]
+    tasks.reverse()
+    return {"counts": counts, "tasks": tasks, "out_dir": str(_dedup_out_dir()),
+            "defaults": dedup.DEFAULTS}
+
+
+@app.post("/api/dedup/retry_failed")
+def api_dedup_retry():
+    n = 0
+    for t in DEDUP_TASKS.values():
+        if t["status"] == "failed":
+            t.update(status="queued", err="", stage="")
+            DEDUP_QUEUE.put_nowait(t["id"])
+            n += 1
+    return {"ok": True, "requeued": n}
+
+
+@app.post("/api/dedup/clear")
+def api_dedup_clear():
+    for tid in [k for k, t in DEDUP_TASKS.items() if t["status"] in ("done", "failed")]:
+        DEDUP_TASKS.pop(tid, None)
+    return {"ok": True}
+
+
+@app.post("/api/dedup/reveal")
+def api_dedup_reveal():
+    os.startfile(str(_dedup_out_dir()))
+    return {"ok": True}
+
+
+async def _dedup_worker():
+    while True:
+        tid = await DEDUP_QUEUE.get()
+        t = DEDUP_TASKS.get(tid)
+        if not t or t["status"] != "queued":
+            continue
+        t["status"] = "running"
+        src = Path(t["video_path"])
+        out = _dedup_out_dir() / src.name
+        if out.resolve() == src.resolve() or out.exists():   # 防覆盖源/重名
+            out = _dedup_out_dir() / f"{src.stem}_{tid}{src.suffix}"
+        try:
+            ok, msg = await dedup.process(str(src), str(out), t["options"],
+                                          on_status=lambda m: t.update(stage=m))
+            t.update(status="done" if ok else "failed", err="" if ok else msg, stage=msg,
+                     out=str(out) if ok else "")
+        except Exception as e:
+            t.update(status="failed", err=str(e)[:150])
 
 
 @app.get("/api/check_update")

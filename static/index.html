@@ -187,7 +187,8 @@
       <a data-page="discover"><span class="ic">🔥</span>发现爆款</a>
       <a data-page="lib"><span class="ic">📦</span>下载库</a>
       <a data-page="tasks"><span class="ic">⬇</span>任务中心<span class="badge" id="taskBadge" style="display:none">0</span></a>
-      <div class="grp">发布</div>
+      <div class="grp">加工 / 发布</div>
+      <a data-page="dedup"><span class="ic">🎞</span>视频去重<span class="badge" id="ddBadge" style="display:none">0</span></a>
       <a data-page="channels"><span class="ic">📤</span>视频号发布<span class="badge" id="upBadge" style="display:none">0</span></a>
       <div class="grp">配置</div>
       <a data-page="set"><span class="ic">⚙️</span>设置</a>
@@ -346,6 +347,76 @@
           <button class="btn ghost" onclick="clearTasks()">🧹 清除已完成/失败</button>
         </div>
         <div id="taskList" style="display:flex;flex-direction:column;gap:8px"></div>
+      </section>
+
+      <!-- 视频去重 -->
+      <section class="page" id="page-dedup">
+        <h2 class="hero">视频<span class="g">去重处理</span></h2>
+        <div class="lead">对下载的视频做 ffmpeg 处理，打乱文件哈希/画面感知指纹/音频指纹，降低同平台判重概率。<b style="color:var(--warn)">防不住 AI 认画面+台词，不保证 100%；请用于有版权/授权的内容。</b></div>
+
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+            <span style="font-weight:800;font-size:16px">选视频</span>
+            <button class="btn ghost" style="padding:6px 12px" onclick="loadDdVideos()">🔄 刷新下载库</button>
+            <span class="sp" style="margin-left:auto;color:var(--sub);font-size:12.5px" id="ddVidMeta"></span>
+          </div>
+          <div id="ddVideoGrid" class="posts" style="max-height:300px;overflow:auto"></div>
+        </div>
+
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">去重项（逐项开关 + 改参数）</div>
+          <div style="color:var(--dim);font-size:12px;margin-bottom:12px">💡 自带 ffmpeg 处理不了音频，变速/音频变调会自动跳过、只做视频去重（想要那两项需装完整 ffmpeg 设环境变量 FFMPEG_BIN）。</div>
+          <div id="ddOpts" style="display:flex;flex-direction:column;gap:2px">
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_metadata" checked><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">改元数据 / MD5</div><div class="d">重编码本身就变 MD5，再随机化元数据，防文件级判重</div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_crop" checked><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">中心裁剪 <input type="number" id="op_crop_pct" value="4" min="1" max="15" step="1" style="width:60px;padding:5px 8px"> %</div><div class="d">裁掉边缘 + 改分辨率，打乱画面感知指纹（最有效）</div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_color" checked><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">微调色</div>
+                <div class="d" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
+                  亮度<input type="number" id="op_bright" value="0.02" step="0.01" style="width:66px;padding:4px 6px">
+                  对比<input type="number" id="op_contrast" value="1.03" step="0.01" style="width:66px;padding:4px 6px">
+                  饱和<input type="number" id="op_sat" value="1.05" step="0.01" style="width:66px;padding:4px 6px"></div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_speed" checked><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">变速 <input type="number" id="op_speed_factor" value="1.03" min="0.9" max="1.1" step="0.01" style="width:66px;padding:5px 8px"> 倍</div><div class="d">改帧时序+音频指纹（需完整 ffmpeg，否则自动跳过）</div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_fps"><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">改帧率 <input type="number" id="op_fps_value" value="30" min="20" max="60" step="1" style="width:60px;padding:5px 8px"> fps</div><div class="d">改变帧指纹</div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_hflip"><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">镜像翻转</div><div class="d">感知指纹变化很大，但画面左右反了、肉眼可见</div></div>
+            </div>
+            <div class="setrow" style="padding:11px 0">
+              <label class="switch"><input type="checkbox" id="op_randomize"><span class="slider"></span></label>
+              <div class="l" style="margin-left:12px"><div class="t">每条参数随机微抖</div><div class="d">批量时每条视频参数略不同，彼此之间也不会撞车</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ptoolbar">
+          <span style="font-weight:700">已选 <span id="ddPickCount">0</span> 条</span>
+          <button class="btn" id="ddRunBtn" disabled onclick="runDedup(this)" style="margin-left:auto">🎬 开始去重</button>
+          <button class="btn ghost" onclick="api('/api/dedup/reveal','POST')">📁 打开导出文件夹</button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;margin:16px 0 12px;flex-wrap:wrap">
+          <span style="font-weight:800;font-size:16px">处理队列</span>
+          <span class="tag load" id="ddRunning">进行 0</span>
+          <span class="tag ok" id="ddDone">完成 0</span>
+          <span class="tag fail" id="ddFailed">失败 0</span>
+          <button class="btn ghost" id="ddRetryBtn" onclick="ddRetry(this)" style="margin-left:auto;display:none">🔁 重试失败</button>
+          <button class="btn ghost" onclick="ddClear()">🧹 清除完成/失败</button>
+        </div>
+        <div id="ddList" style="display:flex;flex-direction:column;gap:8px"></div>
       </section>
 
       <!-- 视频号发布 -->
@@ -600,7 +671,7 @@ async function api(url, method='GET', body){
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
 
 /* nav */
-const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',channels:'视频号发布',set:'设置'};
+const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'视频去重',channels:'视频号发布',set:'设置'};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on');
@@ -611,6 +682,7 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   if(p==='lib') loadLib();
   if(p==='tasks') startTaskPoll();
   if(p==='channels') openChannels();
+  if(p==='dedup') openDedup();
 });
 
 function render(st){
@@ -648,6 +720,13 @@ function render(st){
     if(act){ ub.style.display='grid'; ub.textContent=act; ub.style.background='var(--acc)'; }
     else if(fail){ ub.style.display='grid'; ub.textContent=fail; ub.style.background='var(--red)'; }
     else ub.style.display='none';
+  }
+  const db=document.getElementById('ddBadge');
+  if(db){
+    const act=(st.dedups?.queued||0)+(st.dedups?.running||0), fail=st.dedups?.failed||0;
+    if(act){ db.style.display='grid'; db.textContent=act; db.style.background='var(--acc)'; }
+    else if(fail){ db.style.display='grid'; db.textContent=fail; db.style.background='var(--red)'; }
+    else db.style.display='none';
   }
   // 雷达设置回填（正在编辑时不覆盖）
   const tv=document.getElementById('takeoffVel');
@@ -807,6 +886,83 @@ async function retryFailed(btn){
   btn.disabled=false;
 }
 async function clearTasks(){ try{ await api('/api/tasks/clear','POST'); loadTasks(); }catch(e){} }
+
+/* ---- 视频去重 ---- */
+let ddVideos=[], ddPick=new Set(), ddTimer=null;
+function openDedup(){ loadDdVideos(); startDedupPoll(); }
+async function loadDdVideos(){
+  const grid=document.getElementById('ddVideoGrid');
+  grid.innerHTML='<div class="empty" style="padding:20px">加载中…</div>';
+  try{
+    const d=await api('/api/channels/videos');   // 复用下载库视频列表
+    ddVideos=d.videos||[];
+    document.getElementById('ddVidMeta').textContent='下载库共 '+ddVideos.length+' 个视频';
+    renderDdGrid();
+  }catch(e){ grid.innerHTML=emptyBox('⚠','加载失败',e.message); }
+}
+function renderDdGrid(){
+  const grid=document.getElementById('ddVideoGrid');
+  grid.innerHTML=ddVideos.length? ddVideos.map(v=>`
+    <div class="post ${ddPick.has(v.path)?'sel':''}" onclick='toggleDd(${JSON.stringify(v.path)})'>
+      <div class="pcover" style="display:grid;place-items:center;font-size:28px">🎬<span class="pcheck">✓</span></div>
+      <div class="pcap" title="${esc(v.name)}">${esc(v.name)}</div>
+      <div class="pstat">${esc(v.blogger||'')}${v.mix?' · '+esc(v.mix):''} · ${v.size}MB</div>
+    </div>`).join('') : emptyBox('📭','下载库没有视频','先去下载一些视频');
+}
+function toggleDd(path){ if(ddPick.has(path)) ddPick.delete(path); else ddPick.add(path);
+  renderDdGrid(); const n=ddPick.size;
+  document.getElementById('ddPickCount').textContent=n; document.getElementById('ddRunBtn').disabled=!n; }
+function collectDdOpts(){
+  const on=id=>document.getElementById(id).checked;
+  const num=id=>parseFloat(document.getElementById(id).value);
+  return {metadata:on('op_metadata'), crop:on('op_crop'), crop_pct:num('op_crop_pct'),
+    color:on('op_color'), bright:num('op_bright'), contrast:num('op_contrast'), sat:num('op_sat'),
+    speed:on('op_speed'), speed_factor:num('op_speed_factor'),
+    fps:on('op_fps'), fps_value:num('op_fps_value'), hflip:on('op_hflip'),
+    randomize:on('op_randomize')};
+}
+async function runDedup(btn){
+  if(!ddPick.size) return;
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='入队中…';
+  try{
+    const d=await api('/api/dedup','POST',{video_paths:[...ddPick], options:collectDdOpts()});
+    toast('已加入去重队列 '+d.queued+' 条，处理好的在「去重导出」文件夹');
+    ddPick.clear(); renderDdGrid();
+    document.getElementById('ddPickCount').textContent='0';
+    loadDedupTasks();
+  }catch(e){ uiAlert(e.message); }
+  btn.disabled=false; btn.innerHTML=old;
+}
+const DD_ST={queued:['⏳','排队',''],running:['🎞','处理中','load'],done:['✅','完成','ok'],failed:['❌','失败','fail']};
+function ddRow(t){
+  const [ic,label,cls]=DD_ST[t.status]||['•',t.status,''];
+  return `<div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
+    <span style="flex-shrink:0">${ic}</span>
+    <div style="flex:1;min-width:0">
+      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}</div>
+      <div style="color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.stage||'')}${t.err?` · <span style="color:var(--red)">${esc(t.err)}</span>`:''} · ${esc(t.ts)}</div>
+    </div>
+    <span class="tag ${cls}" style="flex-shrink:0">${label}</span>
+  </div>`;
+}
+async function loadDedupTasks(){
+  try{
+    const d=await api('/api/dedup/tasks');
+    const set=(id,txt)=>{const el=document.getElementById(id); if(el) el.textContent=txt;};
+    set('ddRunning','进行 '+((d.counts.queued||0)+(d.counts.running||0)));
+    set('ddDone','完成 '+d.counts.done); set('ddFailed','失败 '+d.counts.failed);
+    const rb=document.getElementById('ddRetryBtn'); if(rb) rb.style.display=d.counts.failed?'inline-block':'none';
+    document.getElementById('ddList').innerHTML=d.tasks.length?d.tasks.map(ddRow).join('')
+      :emptyBox('🎞','还没有去重任务','选视频、调好去重项，点「开始去重」');
+  }catch(e){}
+}
+function startDedupPoll(){
+  loadDedupTasks(); clearInterval(ddTimer);
+  ddTimer=setInterval(()=>{ const pg=document.getElementById('page-dedup');
+    if(pg&&pg.classList.contains('on')) loadDedupTasks(); else{ clearInterval(ddTimer); ddTimer=null; } },3000);
+}
+async function ddRetry(btn){ btn.disabled=true; try{ const d=await api('/api/dedup/retry_failed','POST'); toast('已重新排队 '+d.requeued+' 条'); loadDedupTasks(); }catch(e){} btn.disabled=false; }
+async function ddClear(){ try{ await api('/api/dedup/clear','POST'); loadDedupTasks(); }catch(e){} }
 
 /* ---- 视频号发布 ---- */
 let chVideos=[], chPick=[], chTimer=null;
