@@ -1,6 +1,6 @@
 {
-  "version": "1.0.8",
-  "notes": "更新后自动重启、自动删旧包、自动建桌面快捷方式；下载整个合集更完整；库内查找提速。",
+  "version": "1.0.9",
+  "notes": "新增 TikTok：侧边栏抖音/TK 一键切换，每平台独立监控、下载、登录；发现爆款新增「涨赞速度 / 黑马 / 互动质量」三个榜（带公式说明），默认按涨赞速度排，抓正在起飞的爆款。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.8/BaokuanMonitor.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.9/BaokuanMonitor.exe"
 }
