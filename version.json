@@ -1,6 +1,6 @@
 {
-  "version": "1.0.10",
-  "notes": "换上全新 App 图标（紫色雷达）；新增 TikTok 多平台切换、每平台独立监控/下载/登录；发现爆款「涨赞速度 / 黑马 / 互动质量」三个榜（带公式，默认按涨赞速度排）。",
+  "version": "1.0.11",
+  "notes": "① 下载任务中心：所有下载统一排队，失败一键重试；② 合集追更：下过的合集自动盯更新，出新集弹窗、一键补齐只下缺的集；③ 合集按集数命名：下成 1.mp4/2.mp4，每部短剧单独一个文件夹，用抖音真实集数（付费缺集也不错位）；④ 起飞预警：新作品涨赞速度超阈值弹窗（带走势线）；⑤ 每日爆款日报：到点自动汇总弹窗；⑥ 修复监控空作品/私密号博主时的崩溃。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.10/BaokuanMonitor.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.11/BaokuanMonitor.exe"
 }
