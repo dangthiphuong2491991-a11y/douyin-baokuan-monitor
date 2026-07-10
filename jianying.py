@@ -182,58 +182,62 @@ def compose_one(template_name, clip_paths, out_name, speed_range=(0.9, 1.0)):
     proto_track = next((t for t in vtracks if t.get("segments")), None)   # 参照：有片段的视频轨道
     if not proto_track:
         raise RuntimeError("模板没有可参照的视频片段（换个有视频的模板）")
-    # 主轨道=空的视频轨道(素材塞这)，没有就用参照轨道本身
-    main = next((t for t in vtracks if not t.get("segments")), None) or proto_track
+
+    def _alpha(t):
+        s = t.get("segments") or []
+        return (s[0].get("clip", {}).get("alpha", 1) if s else 0) or 0
+
+    # 要替换的是"主内容"轨道 = 有片段且不透明(alpha≥0.5)的满屏复合片段；透明叠加层/特效/BGM 全留着
+    targets = [t for t in vtracks if t.get("segments") and _alpha(t) >= 0.5]
+    if not targets:   # 没有不透明主内容 → 退回填第一个空视频轨道
+        targets = [next((t for t in vtracks if not t.get("segments")), proto_track)]
 
     proto_seg = copy.deepcopy(proto_track["segments"][0])
-    proto_mat = next((m for m in mats.get("videos", []) if m.get("id") == proto_seg.get("material_id")), None)
-    if not proto_mat:
-        raise RuntimeError("模板片段找不到对应视频素材")
     ref_ids = set(proto_seg.get("extra_material_refs", []))       # 6 个附属素材（speed/canvas/音轨映射…）
-    aux_protos = {}   # category -> 原型素材
+    aux_protos = {}
     for cat, items in mats.items():
         if isinstance(items, list):
             for it in items:
                 if it.get("id") in ref_ids:
                     aux_protos[cat] = it
+    proto_mat = next((m for m in mats.get("videos", []) if m.get("id") == proto_seg.get("material_id")), None) \
+        or (mats.get("videos") or [{}])[0]
 
-    new_segs = []
-    cursor = 0
-    for clip in clip_paths:
-        dur_us, w, h = _probe(clip)
-        lo, hi = speed_range
-        spd = round(random.uniform(lo, hi), 3) if lo != hi else lo
-        spd = max(0.5, min(2.0, spd or 1.0))
-        play_us = int(dur_us / spd)
-        # 新视频素材（克隆原型，改路径/时长/尺寸）
-        nm = copy.deepcopy(proto_mat)
-        abspath = os.path.abspath(clip).replace("\\", "/")   # 必须绝对路径，否则剪映"媒体丢失"
-        nm.update(id=_new_id(), path=abspath, duration=dur_us, width=w, height=h,
-                  material_name=os.path.basename(clip), has_audio=True,
-                  material_id="", local_material_id="", category_name="", category_id="", crop={})
-        mats["videos"].append(nm)
-        # 每个片段独立克隆一套附属素材，speed 类设成本片段速度
-        new_refs = []
-        for cat, proto in aux_protos.items():
-            na = copy.deepcopy(proto)
-            na["id"] = _new_id()
-            if cat == "speeds":
-                na["speed"] = spd
-                if isinstance(na.get("curve_speed"), dict):
-                    na["curve_speed"] = None
-            mats.setdefault(cat, []).append(na)
-            new_refs.append(na["id"])
-        # 新片段
-        ns = copy.deepcopy(proto_seg)
-        ns.update(id=_new_id(), material_id=nm["id"], extra_material_refs=new_refs,
-                  source_timerange={"start": 0, "duration": dur_us},
-                  target_timerange={"start": cursor, "duration": play_us},
-                  render_timerange={})
-        new_segs.append(ns)
-        cursor += play_us
+    total = 0
+    for track in targets:                       # 每个主内容轨道各塞一套（保留叠层去重效果）
+        new_segs, cursor = [], 0
+        for clip in clip_paths:
+            dur_us, w, h = _probe(clip)
+            lo, hi = speed_range
+            spd = max(0.5, min(2.0, round(random.uniform(lo, hi), 3) if lo != hi else (lo or 1.0)))
+            play_us = int(dur_us / spd)
+            nm = copy.deepcopy(proto_mat)
+            abspath = os.path.abspath(clip).replace("\\", "/")   # 绝对路径，否则剪映"媒体丢失"
+            nm.update(id=_new_id(), path=abspath, duration=dur_us, width=w, height=h,
+                      material_name=os.path.basename(clip), has_audio=True,
+                      material_id="", local_material_id="", category_name="", category_id="", crop={})
+            mats["videos"].append(nm)
+            new_refs = []
+            for cat, proto in aux_protos.items():
+                na = copy.deepcopy(proto)
+                na["id"] = _new_id()
+                if cat == "speeds":
+                    na["speed"] = spd
+                    if isinstance(na.get("curve_speed"), dict):
+                        na["curve_speed"] = None
+                mats.setdefault(cat, []).append(na)
+                new_refs.append(na["id"])
+            ns = copy.deepcopy(proto_seg)
+            ns.update(id=_new_id(), material_id=nm["id"], extra_material_refs=new_refs,
+                      source_timerange={"start": 0, "duration": dur_us},
+                      target_timerange={"start": cursor, "duration": play_us},
+                      render_timerange={})
+            new_segs.append(ns)
+            cursor += play_us
+        track["segments"] = new_segs
+        total = max(total, cursor)
 
-    main["segments"] = new_segs
-    tj["duration"] = cursor
+    tj["duration"] = total
     _write_draft(template_name, out_name, tj)
     return out_name
 
