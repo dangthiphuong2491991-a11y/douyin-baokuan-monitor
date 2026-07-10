@@ -97,16 +97,19 @@ def _extract_cookies(cookies) -> dict:
     return jar
 
 
+_PLATFORM_LOGIN = {
+    "douyin": ("登录抖音 · 用手机抖音扫码或账号登录", "https://www.douyin.com/"),
+    "tiktok": ("Login TikTok · 需已连 VPN，用账号或扫码登录", "https://www.tiktok.com/login"),
+}
+
+
 class JsApi:
     """暴露给前端 window.pywebview.api 调用（跑在 pywebview 桥线程，可安全操作窗口）"""
 
-    def login_qr(self):
+    def login_qr(self, platform="douyin"):
+        title, url = _PLATFORM_LOGIN.get(platform, _PLATFORM_LOGIN["douyin"])
         try:
-            win = webview.create_window(
-                "登录抖音 · 用手机抖音扫码或账号登录",
-                "https://www.douyin.com/",
-                width=1040, height=760,
-            )
+            win = webview.create_window(title, url, width=1040, height=760)
         except Exception as e:
             return {"ok": False, "error": f"打开登录窗口失败: {e}"}
 
@@ -126,7 +129,7 @@ class JsApi:
             pass
 
         if found:
-            appmod.set_login_cookie(found)
+            appmod.set_login_cookie(found, platform)
             return {"ok": True}
         return {"ok": False, "error": "超时未检测到登录（3分钟内没扫码或没登录成功）"}
 
@@ -138,7 +141,7 @@ if __name__ == "__main__":
     _port_ready()
     jsapi = JsApi()
     # 给 /api/login_qr 兜底用（前端优先直接调 pywebview.api）
-    appmod._login_callback = lambda: jsapi.login_qr().get("ok")
+    appmod._login_callback = lambda platform="douyin": jsapi.login_qr(platform).get("ok")
     webview.create_window(
         "爆款监控 · 抖音博主更新雷达",
         f"http://127.0.0.1:{PORT}/",

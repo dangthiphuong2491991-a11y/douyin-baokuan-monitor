@@ -18,45 +18,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from f2.apps.douyin.handler import DouyinHandler
-from f2.apps.douyin.utils import TokenManager, SecUserIdFetcher, AwemeIdFetcher
+import platforms
+from platforms import get_adapter, PLATFORM_LIST
 
 
-# 禁用 f2 自带的 Bark 通知：我们没用它，它每次失败重试拖慢 fetch_one_video 等操作
-async def _no_bark(self, *a, **k):
-    return None
-
-
-DouyinHandler._send_bark_notification = _no_bark
-
-AID_RE = r"(?:modal_id=|/video/|/note/|/share/video/|/share/note/)(\d{6,})"
-
-
-async def resolve_aweme_id(text: str):
-    """从链接/口令/纯ID里解析出作品ID（短链会跟随重定向）"""
-    text = text.strip()
-    if re.fullmatch(r"\d{6,}", text):
-        return text
-    m = re.search(r"https?://\S+", text)
-    if not m:
-        return None
-    link = m.group(0).rstrip("，。、）)]】")
-    probe = link
-    if not re.search(AID_RE, probe):
-        try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(follow_redirects=True, timeout=20,
-                                          headers={"User-Agent": UA}) as c:
-                probe = str((await c.get(link)).url)
-        except Exception:
-            probe = link
-    mm = re.search(AID_RE, probe)
-    if mm:
-        return mm.group(1)
-    try:
-        return await AwemeIdFetcher.get_aweme_id(link)
-    except Exception:
-        return None
+async def resolve_aweme_id(text: str, platform: str = "douyin"):
+    """从链接/口令/纯ID里解析出作品ID（走对应平台的适配器）"""
+    return await get_adapter(platform).resolve_aweme_id(text)
 
 # 打包后(PyInstaller)与源码运行的路径不同：
 #   静态资源(static)在包内(_MEIPASS)；data/downloads 要放在 exe 旁边(持久、可写)
@@ -105,6 +73,26 @@ state = _load(STATE_FILE, {"seen": {}, "updates": [], "last_check": None, "error
 POSTS_CACHE = {}  # sec_uid -> {aweme_id: 完整 aweme dict}，供手动下载取新鲜地址
 
 
+def _migrate_config():
+    """老配置迁移到多平台结构：cookie→cookies.douyin；博主补 platform=douyin"""
+    changed = False
+    if "cookies" not in config:
+        config["cookies"] = {}
+        changed = True
+    if config.get("cookie"):     # 老的单 cookie 归到抖音
+        config["cookies"].setdefault("douyin", config.pop("cookie"))
+        changed = True
+    for b in config.get("bloggers", []):
+        if "platform" not in b:
+            b["platform"] = "douyin"
+            changed = True
+    if changed:
+        _save(CONFIG_FILE, config)
+
+
+_migrate_config()
+
+
 def get_dl() -> Path:
     """当前下载根目录（可在设置里自定义，默认 ./downloads）"""
     d = Path(config.get("download_dir") or DL)
@@ -116,40 +104,33 @@ def get_dl() -> Path:
     return d
 
 
-def is_logged_in() -> bool:
-    c = config.get("cookie") or ""
-    return "sessionid" in c
+def platform_dir(platform: str) -> Path:
+    """某平台的下载根：downloads/平台名/"""
+    names = {"douyin": "抖音", "tiktok": "TikTok"}
+    d = get_dl() / names.get(platform, platform)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def make_kwargs():
-    # 已登录：直接用用户真实 cookie（能翻页拿更多作品）
-    login_cookie = config.get("cookie")
-    if login_cookie and "sessionid" in login_cookie:
-        cookie = login_cookie
-    else:
-        try:
-            mstoken = TokenManager.gen_real_msToken()
-        except Exception:
-            mstoken = ""
-        cookie = f"ttwid={TokenManager.gen_ttwid()};"
-        if mstoken:
-            cookie += f" msToken={mstoken};"
-    return {
-        "headers": {"User-Agent": UA, "Referer": "https://www.douyin.com/"},
-        "cookie": cookie,
-        "proxies": {"http://": None, "https://": None},
-        "mode": "post",
-        "timeout": 30,
-    }
+def _cookie(platform: str) -> str:
+    return (config.get("cookies") or {}).get(platform, "") or ""
 
 
-def set_login_cookie(cookie_str: str):
-    config["cookie"] = (cookie_str or "").strip()
+def is_logged_in(platform: str = "douyin") -> bool:
+    return "sessionid" in _cookie(platform)
+
+
+def make_kwargs(platform: str = "douyin"):
+    return get_adapter(platform).make_kwargs(_cookie(platform))
+
+
+def set_login_cookie(cookie_str: str, platform: str = "douyin"):
+    config.setdefault("cookies", {})[platform] = (cookie_str or "").strip()
     _save(CONFIG_FILE, config)
 
 
-def clear_login_cookie():
-    config.pop("cookie", None)
+def clear_login_cookie(platform: str = "douyin"):
+    (config.get("cookies") or {}).pop(platform, None)
     _save(CONFIG_FILE, config)
 
 
@@ -165,38 +146,51 @@ def fmt_ts(ts) -> str:
         return str(ts)
 
 
-async def fetch_posts_raw(sec_uid: str, max_count: int = 20) -> list:
+def _to_int(v) -> int:
+    """把 '1.2万' / '12000' / 12000 之类统一成整数"""
+    if isinstance(v, (int, float)):
+        return int(v)
+    try:
+        s = str(v).strip()
+        if s.endswith(("万", "w", "W")):
+            return int(float(s[:-1]) * 10000)
+        return int(float(re.sub(r"[^\d.]", "", s) or 0))
+    except Exception:
+        return 0
+
+
+def rank_metrics(it: dict, age_hours: float, follower: int = 0) -> dict:
+    """三个榜的指标：
+    ⚡涨赞速度 vel=点赞÷发布小时数(抓正在起飞的);
+    🐴黑马比 dark=点赞÷粉丝数(越级=内容强可复制);
+    💬互动质量 qual=(评论+转发+收藏)÷点赞×100%(挡搬运/擦边)。"""
+    digg = it.get("digg") or 0
+    ah = max(float(age_hours or 0), 0.1)
+    vel = round(digg / ah, 1)
+    dark = round(digg / follower, 2) if follower and follower > 0 else None
+    inter = (it.get("comment") or 0) + (it.get("share") or 0) + (it.get("collect") or 0)
+    qual = round(inter / digg * 100, 1) if digg > 0 else 0.0
+    return {"vel": vel, "follower": follower or 0, "dark": dark, "qual": qual}
+
+
+async def fetch_posts_raw(sec_uid: str, max_count: int = 20, platform: str = "douyin") -> list:
     """抓取博主作品（可多页累积），返回 aweme 原始 dict 列表"""
-    kw = make_kwargs()
-    if max_count > 20:
-        kw["timeout"] = 8  # f2 用 timeout 值当翻页间隔，多页时调短些（兼顾请求超时）
-    h = DouyinHandler(kw)
-    out = []
-    async for posts in h.fetch_user_post_videos(
-        sec_user_id=sec_uid, page_counts=20, max_counts=max_count
-    ):
-        out.extend(posts._to_raw().get("aweme_list") or [])
-        if len(out) >= max_count:
-            break
-    return out[:max_count]
+    return await get_adapter(platform).posts(_cookie(platform), sec_uid, max_count)
 
 
-async def fetch_posts_windowed(sec_uid: str, hours: int, max_pages: int = 8) -> list:
+async def fetch_posts_windowed(sec_uid: str, hours: int, max_pages: int = 8,
+                               platform: str = "douyin") -> list:
     """按时间窗抓：一页里最新的都超出时间范围就停（作品按时间倒序，够准又不浪费翻页）。"""
-    kw = make_kwargs()
-    kw["timeout"] = 5  # f2 用它当翻页间隔；稳妥值，别太快免得被风控（抓不全）
-    h = DouyinHandler(kw)
+    ad = get_adapter(platform)
     cutoff = time.time() - hours * 3600 if hours else 0
     out = []
     pages = 0
-    async for posts in h.fetch_user_post_videos(
-        sec_user_id=sec_uid, page_counts=20, max_counts=max_pages * 20
-    ):
-        page = posts._to_raw().get("aweme_list") or []
+    async for page in ad.posts_pages(_cookie(platform), sec_uid, max_pages=max_pages, page_timeout=5):
+        page = page or []
         out.extend(page)
         pages += 1
         if cutoff and page:
-            newest = max((a.get("create_time") or 0) for a in page)
+            newest = max((ad.normalize(a).get("create_time") or 0) for a in page)
             if newest < cutoff:   # 整页都比截止时间早 → 后面更早，停
                 break
         if pages >= max_pages:
@@ -204,39 +198,16 @@ async def fetch_posts_windowed(sec_uid: str, hours: int, max_pages: int = 8) -> 
     return out
 
 
-async def fetch_profile(sec_uid: str) -> dict:
-    h = DouyinHandler(make_kwargs())
-    p = await h.fetch_user_profile(sec_uid)
-    return {
-        "nickname": p.nickname_raw or p.nickname,
-        "avatar": p.avatar_url,
-        "follower_count": p.follower_count,
-        "aweme_count": p.aweme_count,
-        "signature": (p.signature_raw or "")[:100],
-    }
+async def fetch_profile(sec_uid: str, platform: str = "douyin") -> dict:
+    return await get_adapter(platform).profile(_cookie(platform), sec_uid)
 
 
-def pick_video_url(aweme: dict) -> str | None:
-    video = aweme.get("video") or {}
-    rates = video.get("bit_rate") or []
-    best, best_br = None, -1
-    for r in rates:
-        urls = ((r.get("play_addr") or {}).get("url_list")) or []
-        if urls and r.get("bit_rate", 0) > best_br:
-            best, best_br = urls[0], r.get("bit_rate", 0)
-    if best:
-        return best
-    urls = ((video.get("play_addr") or {}).get("url_list")) or []
-    return urls[-1] if urls else None
+def pick_video_url(aweme: dict, platform: str = "douyin"):
+    return get_adapter(platform).normalize(aweme).get("video_url")
 
 
-def pick_cover_url(aweme: dict) -> str | None:
-    video = aweme.get("video") or {}
-    for key in ("cover", "origin_cover", "dynamic_cover"):
-        urls = ((video.get(key) or {}).get("url_list")) or []
-        if urls:
-            return urls[0]
-    return None
+def pick_cover_url(aweme: dict, platform: str = "douyin"):
+    return get_adapter(platform).normalize(aweme).get("cover")
 
 
 async def download_file(url: str, dest: Path) -> bool:
@@ -278,42 +249,32 @@ def log_err(msg: str):
 
 async def process_new_aweme(blogger: dict, aweme: dict):
     """发现新作品：只记录信息 + 下封面（缩略图）+ 弹窗提醒，不自动下正片。缓存 aweme 供手动下载/播放。"""
-    aid = str(aweme.get("aweme_id"))
+    platform = blogger.get("platform", "douyin")
+    it = get_adapter(platform).normalize(aweme)
+    aid = it["aweme_id"]
     nickname = blogger.get("nickname", "")
-    desc = (aweme.get("desc") or "").strip()
-    stats = aweme.get("statistics") or {}
-    is_images = bool(aweme.get("images"))
-    dur_ms = (aweme.get("video") or {}).get("duration") or 0
-
     dl = get_dl()
-    folder = dl / sanitize(nickname, 30)
-    date_tag = datetime.fromtimestamp(int(aweme.get("create_time", time.time()))).strftime("%Y%m%d")
-    stem = f"{date_tag}_{sanitize(desc, 40)}_{aid[-6:]}"
+    folder = platform_dir(platform) / sanitize(nickname, 30)
+    date_tag = datetime.fromtimestamp(int(it.get("create_time") or time.time())).strftime("%Y%m%d")
+    stem = f"{date_tag}_{sanitize(it['desc'], 40)}_{aid[-6:]}"
+    dur_ms = it["duration_ms"]
 
-    # 缓存完整 aweme，供手动下载 / 在线播放取地址
     POSTS_CACHE.setdefault(blogger["sec_user_id"], {})[aid] = aweme
 
     rec = {
-        "aweme_id": aid,
-        "sec_user_id": blogger["sec_user_id"],
-        "nickname": nickname,
-        "desc": desc or "(无标题)",
-        "type": "图集" if is_images else "视频",
-        "create_time": fmt_ts(aweme.get("create_time")),
+        "aweme_id": aid, "sec_user_id": blogger["sec_user_id"], "platform": platform,
+        "nickname": nickname, "desc": it["desc"] or "(无标题)",
+        "type": "图集" if it["is_images"] else "视频",
+        "create_time": fmt_ts(it.get("create_time")),
         "found_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "duration": f"{dur_ms // 60000}:{dur_ms % 60000 // 1000:02d}" if dur_ms else "",
-        "digg": stats.get("digg_count", 0),
-        "comment": stats.get("comment_count", 0),
-        "collect": stats.get("collect_count", 0),
-        "share": stats.get("share_count", 0),
-        "url": f"https://www.douyin.com/video/{aid}",
-        "cover": "",
+        "digg": it["digg"], "comment": it["comment"], "collect": it["collect"], "share": it["share"],
+        "url": it["web_url"], "cover": "",
     }
 
-    cover_url = pick_cover_url(aweme)
-    if cover_url:
+    if it["cover"]:
         cover_path = folder / f"{stem}.jpg"
-        if await download_file(cover_url, cover_path):
+        if await download_file(it["cover"], cover_path):
             rec["cover"] = f"/files/{cover_path.relative_to(dl).as_posix()}"
 
     state["updates"].insert(0, rec)
@@ -325,66 +286,69 @@ async def process_new_aweme(blogger: dict, aweme: dict):
            icon=cover_path if rec["cover"] else None)
 
 
-async def download_aweme_media(nickname: str, aweme: dict) -> tuple:
-    """手动下载单个作品（视频或图集）到 downloads/昵称/。返回 (ok, 文件url)"""
-    aid = str(aweme.get("aweme_id"))
-    desc = (aweme.get("desc") or "").strip()
-    is_images = bool(aweme.get("images"))
+async def download_aweme_media(nickname: str, aweme: dict, platform: str = "douyin") -> tuple:
+    """手动下载单个作品（视频或图集）到 downloads/平台/昵称/。返回 (ok, 文件url)"""
+    it = get_adapter(platform).normalize(aweme)
+    aid = it["aweme_id"]
     dl = get_dl()
-    folder = dl / sanitize(nickname, 30)
-    date_tag = datetime.fromtimestamp(int(aweme.get("create_time", time.time()))).strftime("%Y%m%d")
-    stem = f"{date_tag}_{sanitize(desc, 40)}_{aid[-6:]}"
+    folder = platform_dir(platform) / sanitize(nickname, 30)
+    date_tag = datetime.fromtimestamp(int(it.get("create_time") or time.time())).strftime("%Y%m%d")
+    stem = f"{date_tag}_{sanitize(it['desc'], 40)}_{aid[-6:]}"
 
-    cover_url = pick_cover_url(aweme)
-    if cover_url:
-        await download_file(cover_url, folder / f"{stem}.jpg")
+    if it["cover"]:
+        await download_file(it["cover"], folder / f"{stem}.jpg")
 
-    if is_images:
+    if it["is_images"]:
         n = 0
-        for i, img in enumerate(aweme.get("images") or [], 1):
-            urls = img.get("url_list") or []
-            if urls and await download_file(urls[-1], folder / f"{stem}_{i:02d}.jpeg"):
+        for i, u in enumerate(it["image_urls"], 1):
+            if await download_file(u, folder / f"{stem}_{i:02d}.jpeg"):
                 n += 1
         return (n > 0, f"/files/{folder.relative_to(dl).as_posix()}" if n else "")
     else:
-        vurl = pick_video_url(aweme)
-        if vurl:
+        if it["video_url"]:
             vp = folder / f"{stem}.mp4"
-            if await download_file(vurl, vp):
+            if await download_file(it["video_url"], vp):
                 return True, f"/files/{vp.relative_to(dl).as_posix()}"
     return False, ""
 
 
-def _downloaded_tags(nickname: str) -> set:
+def _downloaded_tags(nickname: str, platform: str = "douyin") -> set:
     """已下载作品的 id 尾6位集合。只认正片（.mp4 视频 / _NN.jpeg 图集），封面 .jpg 不算下载。"""
-    folder = get_dl() / sanitize(nickname, 30)
+    folder = platform_dir(platform) / sanitize(nickname, 30)
     tags = set()
     if folder.exists():
         for f in folder.iterdir():
-            # 视频 {stem}.mp4 或 图集 {stem}_01.jpeg，排除封面 {stem}.jpg
             m = re.search(r"_(\d{6})\.mp4$", f.name) or re.search(r"_(\d{6})_\d+\.jpe?g$", f.name)
             if m:
                 tags.add(m.group(1))
     return tags
 
 
-def _blogger_nickname(sec_uid: str) -> str:
+def _blogger(sec_uid: str) -> dict:
     for b in config["bloggers"]:
         if b["sec_user_id"] == sec_uid:
-            return b.get("nickname") or sec_uid[:16]
-    return ""
+            return b
+    return {}
 
 
-async def resolve_aweme(aid: str) -> dict:
+def _blogger_nickname(sec_uid: str) -> str:
+    b = _blogger(sec_uid)
+    return b.get("nickname") or (sec_uid[:16] if sec_uid else "")
+
+
+def _platform_of(sec_uid: str) -> str:
+    return _blogger(sec_uid).get("platform", "douyin")
+
+
+async def resolve_aweme(aid: str, platform: str = "douyin") -> dict:
     """按作品ID找到完整 aweme：先查各缓存，缺失/无地址则重新拉详情"""
     aid = str(aid)
     for cache in POSTS_CACHE.values():
         a = cache.get(aid)
-        if a and _has_media(a):
+        if a and _has_media(a, platform):
             return a
     try:
-        v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=aid)
-        full = (v._to_raw() or {}).get("aweme_detail")
+        full = await get_adapter(platform).one_video(_cookie(platform), aid)
         if full:
             POSTS_CACHE.setdefault("_resolved", {})[aid] = full
             return full
@@ -394,20 +358,23 @@ async def resolve_aweme(aid: str) -> dict:
 
 
 async def check_blogger(blogger: dict, baseline: bool = False) -> int:
+    platform = blogger.get("platform", "douyin")
+    ad = get_adapter(platform)
     sec_uid = blogger["sec_user_id"]
-    awemes = await fetch_posts_raw(sec_uid)
+    awemes = await fetch_posts_raw(sec_uid, platform=platform)
     if not awemes:
-        log_err(f"{blogger.get('nickname', sec_uid)}: 未获取到作品（可能是风控，稍后自动重试）")
+        log_err(f"{blogger.get('nickname', sec_uid)}: 未获取到作品（可能是风控/需VPN，稍后自动重试）")
         return 0
+    # 归一化一遍，拿到 (aid, create_time, raw)
+    items = [(ad.normalize(a), a) for a in awemes]
     seen = set(state["seen"].get(sec_uid, []))
-    new_items = [a for a in awemes if str(a.get("aweme_id")) not in seen]
+    new_items = [(it, a) for (it, a) in items if it["aweme_id"] not in seen]
     if baseline or not seen:
-        # 首次添加：只记录现有作品，不提醒不下载
-        state["seen"][sec_uid] = list(seen | {str(a.get("aweme_id")) for a in awemes})
+        state["seen"][sec_uid] = list(seen | {it["aweme_id"] for (it, a) in items})
         _save(STATE_FILE, state)
         return 0
-    for a in sorted(new_items, key=lambda x: x.get("create_time", 0)):
-        state["seen"][sec_uid].append(str(a.get("aweme_id")))
+    for it, a in sorted(new_items, key=lambda x: x[0].get("create_time", 0)):
+        state["seen"][sec_uid].append(it["aweme_id"])
         await process_new_aweme(blogger, a)
     if new_items:
         _save(STATE_FILE, state)
@@ -453,16 +420,16 @@ def serve_file(path: str):
 
 
 @app.get("/api/stream/{aid}")
-async def api_stream(aid: str, request: Request):
-    """在线播放代理：带 Referer 抓抖音视频流，支持 Range 拖动进度条"""
-    aweme = await resolve_aweme(aid)
+async def api_stream(aid: str, request: Request, platform: str = "douyin"):
+    """在线播放代理：带 Referer 抓视频流，支持 Range 拖动进度条"""
+    aweme = await resolve_aweme(aid, platform)
     if not aweme:
         return JSONResponse({"error": "取不到该视频"}, status_code=404)
-    url = pick_video_url(aweme)
+    url = pick_video_url(aweme, platform)
     if not url:
         return JSONResponse({"error": "该作品没有视频（可能是图集）"}, status_code=404)
 
-    up_headers = {"User-Agent": UA, "Referer": "https://www.douyin.com/"}
+    up_headers = {"User-Agent": UA, "Referer": get_adapter(platform).home_url}
     rng = request.headers.get("range")
     if rng:
         up_headers["Range"] = rng
@@ -487,14 +454,10 @@ async def api_stream(aid: str, request: Request):
 
 
 @app.get("/api/aweme_images/{aid}")
-async def api_aweme_images(aid: str):
+async def api_aweme_images(aid: str, platform: str = "douyin"):
     """图集的图片地址（前端用 no-referrer 直接展示）"""
-    aweme = await resolve_aweme(aid)
-    imgs = []
-    for im in ((aweme or {}).get("images") or []):
-        urls = im.get("url_list") or []
-        if urls:
-            imgs.append(urls[-1])
+    aweme = await resolve_aweme(aid, platform)
+    imgs = get_adapter(platform).normalize(aweme).get("image_urls", []) if aweme else []
     return {"images": imgs}
 
 
@@ -514,10 +477,13 @@ def api_status():
     updates = []
     for u in state["updates"][:200]:
         nk = u.get("nickname", "")
-        if nk not in tags:
-            tags[nk] = _downloaded_tags(nk)
+        pf = u.get("platform", "douyin")
+        key = (pf, nk)
+        if key not in tags:
+            tags[key] = _downloaded_tags(nk, pf)
         u = dict(u)
-        u["downloaded"] = str(u.get("aweme_id", ""))[-6:] in tags[nk]
+        u.setdefault("platform", pf)
+        u["downloaded"] = str(u.get("aweme_id", ""))[-6:] in tags[key]
         updates.append(u)
     return {
         "interval_minutes": config["interval_minutes"],
@@ -527,7 +493,9 @@ def api_status():
         "errors": state.get("errors", [])[:5],
         "download_dir": config.get("download_dir") or "",
         "dir_chosen": bool(config.get("download_dir")),
-        "logged_in": is_logged_in(),
+        "logged_in": is_logged_in("douyin"),
+        "logged_in_map": {a["key"]: is_logged_in(a["key"]) for a in PLATFORM_LIST},
+        "platforms": PLATFORM_LIST,
         "version": VERSION,
         "mix_progress": list(MIX_PROGRESS.values()),
     }
@@ -535,64 +503,51 @@ def api_status():
 
 class AddBody(BaseModel):
     url: str
+    platform: str = "douyin"
 
 
 @app.post("/api/bloggers")
 async def api_add_blogger(body: AddBody):
+    platform = body.platform or "douyin"
+    ad = get_adapter(platform)
     url = body.url.strip()
-    # 允许直接贴 sec_user_id
-    if re.fullmatch(r"MS4wLjAB[\w\-=]+", url):
+    sec_uid = None
+    if re.fullmatch(r"MS4wLjAB[\w\-=]+", url):    # 抖音/TikTok 的 secUid 都是 MS4 开头
         sec_uid = url
     else:
-        # 从整段分享口令里提取链接（短链/主页/视频都可）
         m = re.search(r"https?://\S+", url)
         if not m:
-            return JSONResponse({"error": "没找到链接。请把抖音「分享 → 复制链接」的整段文字粘进来"}, status_code=400)
+            return JSONResponse({"error": "没找到链接。请把「分享 → 复制链接」的整段文字粘进来"}, status_code=400)
         link = m.group(0).rstrip("，。、）)]】")
-        sec_uid = None
         # ① 先按博主主页解析
         try:
-            sec_uid = await SecUserIdFetcher.get_sec_user_id(link)
+            sec_uid = await ad.resolve_user_id(link)
         except Exception:
             sec_uid = None
         # ② 主页解析不了 → 可能是单条视频链接，反查作者
         if not sec_uid:
-            AID_RE = r"(?:modal_id=|/video/|/note/|/share/video/|/share/note/)(\d{6,})"
-            probe = link
-            # 链接里没有内嵌作品ID（如短链 v.douyin.com）→ 跟随重定向拿真实地址
-            if not re.search(AID_RE, probe):
-                try:
-                    async with httpx.AsyncClient(follow_redirects=True, timeout=20,
-                                                 headers={"User-Agent": UA}) as c:
-                        probe = str((await c.get(link)).url)
-                except Exception:
-                    probe = link
-            mm = re.search(AID_RE, probe)
-            aid = mm.group(1) if mm else None
-            if not aid:
-                try:
-                    aid = await AwemeIdFetcher.get_aweme_id(link)
-                except Exception:
-                    aid = None
-            if aid:
-                try:
-                    v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=aid)
-                    sec_uid = v.sec_user_id
-                except Exception:
-                    sec_uid = None
+            try:
+                aid = await ad.resolve_aweme_id(link)
+                if aid:
+                    full = await ad.one_video(_cookie(platform), aid)
+                    if full:
+                        sec_uid = ad.normalize(full).get("author_id")
+            except Exception:
+                sec_uid = None
         if not sec_uid:
             return JSONResponse(
-                {"error": "无法识别博主。请粘贴抖音「分享 → 复制链接」的主页或视频口令整段文字"},
+                {"error": "无法识别博主。请粘贴「分享 → 复制链接」的主页或视频链接整段文字"},
                 status_code=400)
-    if any(b["sec_user_id"] == sec_uid for b in config["bloggers"]):
+    if any(b["sec_user_id"] == sec_uid and b.get("platform", "douyin") == platform
+           for b in config["bloggers"]):
         return JSONResponse({"error": "该博主已在监控列表中"}, status_code=400)
     try:
-        prof = await fetch_profile(sec_uid)
+        prof = await fetch_profile(sec_uid, platform)
     except Exception as e:
         prof = {"nickname": sec_uid[:16], "avatar": "", "follower_count": "", "aweme_count": "", "signature": ""}
         log_err(f"获取博主资料失败(不影响监控): {e}")
-    blogger = {"sec_user_id": sec_uid, "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-               "notify": True, **prof}
+    blogger = {"sec_user_id": sec_uid, "platform": platform,
+               "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "notify": True, **prof}
     config["bloggers"].append(blogger)
     _save(CONFIG_FILE, config)
     try:
@@ -653,39 +608,35 @@ def api_check():
 
 
 @app.get("/api/blogger_posts/{sec_uid}")
-async def api_blogger_posts(sec_uid: str, cursor: int = 0):
+async def api_blogger_posts(sec_uid: str, cursor: int = 0, platform: str = "douyin"):
     """抓取博主的作品列表（供浏览+手动挑选下载），并缓存完整数据"""
+    platform = _platform_of(sec_uid) or platform
+    ad = get_adapter(platform)
     try:
-        h = DouyinHandler(make_kwargs())
-        awemes = []
-        async for posts in h.fetch_user_post_videos(
-            sec_user_id=sec_uid, max_cursor=cursor, page_counts=20, max_counts=20
-        ):
-            awemes = posts._to_raw().get("aweme_list") or []
-            break
+        awemes = await ad.posts(_cookie(platform), sec_uid, max_count=20)
     except Exception as e:
         return JSONResponse({"error": f"获取作品失败: {e}"}, status_code=400)
 
     cache = POSTS_CACHE.setdefault(sec_uid, {})
     nickname = _blogger_nickname(sec_uid)
     if not nickname and awemes:
-        nickname = ((awemes[0].get("author") or {}).get("nickname")) or sec_uid[:16]
-    done = _downloaded_tags(nickname)
+        nickname = ad.normalize(awemes[0]).get("author_name") or sec_uid[:16]
+    done = _downloaded_tags(nickname, platform)
 
     items = []
     for a in awemes:
-        aid = str(a.get("aweme_id"))
+        it = ad.normalize(a)
+        aid = it["aweme_id"]
         cache[aid] = a
-        stats = a.get("statistics") or {}
-        dur = (a.get("video") or {}).get("duration") or 0
+        dur = it["duration_ms"]
         items.append({
             "aweme_id": aid,
-            "desc": (a.get("desc") or "").strip() or "(无标题)",
-            "type": "图集" if a.get("images") else "视频",
-            "cover": pick_cover_url(a) or "",
-            "create_time": fmt_ts(a.get("create_time")),
+            "desc": it["desc"] or "(无标题)",
+            "type": "图集" if it["is_images"] else "视频",
+            "cover": it["cover"] or "",
+            "create_time": fmt_ts(it["create_time"]),
             "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
-            "digg": stats.get("digg_count", 0),
+            "digg": it["digg"],
             "downloaded": aid[-6:] in done,
         })
     return {"nickname": nickname, "count": len(items), "posts": items}
@@ -694,19 +645,22 @@ async def api_blogger_posts(sec_uid: str, cursor: int = 0):
 class DownloadBody(BaseModel):
     sec_user_id: str
     aweme_ids: list[str]
+    platform: str = "douyin"
 
 
-def _has_media(a: dict) -> bool:
+def _has_media(a: dict, platform: str = "douyin") -> bool:
     """该 aweme 是否带真正可下载的媒体地址（相关推荐的预览版没有 play_addr）"""
     if not a:
         return False
-    if a.get("images"):
-        return any((img.get("url_list")) for img in a["images"])
-    return bool(pick_video_url(a))
+    it = get_adapter(platform).normalize(a)
+    if it["is_images"]:
+        return bool(it["image_urls"])
+    return bool(it["video_url"])
 
 
 @app.post("/api/download_selected")
 async def api_download_selected(body: DownloadBody):
+    platform = getattr(body, "platform", None) or "douyin"
     nickname = _blogger_nickname(body.sec_user_id)
     cache = POSTS_CACHE.get(body.sec_user_id, {})
     results = []
@@ -714,11 +668,10 @@ async def api_download_selected(body: DownloadBody):
         aid = str(aid)
         aweme = cache.get(aid)
         # 缓存缺失，或（相关推荐预览版）没有下载地址 → 按 ID 重新拉完整详情
-        if aweme is None or not _has_media(aweme):
+        if aweme is None or not _has_media(aweme, platform):
             try:
-                v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=aid)
-                full = (v._to_raw() or {}).get("aweme_detail")
-                if _has_media(full):
+                full = await resolve_aweme(aid, platform)
+                if full and _has_media(full, platform):
                     aweme = full
             except Exception as e:
                 if aweme is None:
@@ -727,9 +680,9 @@ async def api_download_selected(body: DownloadBody):
         if not aweme:
             results.append({"aweme_id": aid, "ok": False, "err": "无数据"})
             continue
-        nm = nickname or ((aweme.get("author") or {}).get("nickname")) or "未知博主"
+        nm = nickname or get_adapter(platform).normalize(aweme).get("author_name") or "未知博主"
         try:
-            ok, _ = await download_aweme_media(nm, aweme)
+            ok, _ = await download_aweme_media(nm, aweme, platform)
             results.append({"aweme_id": aid, "ok": ok})
         except Exception as e:
             log_err(f"手动下载 {aid} 失败: {e}")
@@ -741,66 +694,59 @@ async def api_download_selected(body: DownloadBody):
 MIX_PROGRESS = {}   # mix_id -> {name, done, total}
 
 
-def _mix_of(aweme: dict):
-    mi = (aweme or {}).get("mix_info") or {}
-    if not mi.get("mix_id"):
-        return None
-    st = mi.get("statis") or {}
-    return {"mix_id": mi["mix_id"], "mix_name": mi.get("mix_name") or "合集",
-            "total": st.get("updated_to_episode") or st.get("total_episode") or 0}
+def _mix_of(aweme: dict, platform: str = "douyin"):
+    return get_adapter(platform).normalize(aweme).get("mix") if aweme else None
 
 
 @app.get("/api/mix_info/{aid}")
-async def api_mix_info(aid: str):
-    a = await resolve_aweme(aid)
-    m = _mix_of(a)
+async def api_mix_info(aid: str, platform: str = "douyin"):
+    a = await resolve_aweme(aid, platform)
+    m = _mix_of(a, platform)
     return {"in_mix": bool(m), **(m or {})}
 
 
 class MixBody(BaseModel):
     aweme_id: str
+    platform: str = "douyin"
 
 
 @app.post("/api/download_mix")
 async def api_download_mix(body: MixBody):
-    a = await resolve_aweme(body.aweme_id)
-    m = _mix_of(a)
+    platform = body.platform or "douyin"
+    a = await resolve_aweme(body.aweme_id, platform)
+    m = _mix_of(a, platform)
     if not m:
         return JSONResponse({"error": "这条视频不属于任何合集"}, status_code=400)
-    author = a.get("author") or {}
-    nickname = _blogger_nickname(author.get("sec_uid", "")) or author.get("nickname") or "未知博主"
+    it = get_adapter(platform).normalize(a)
+    nickname = _blogger_nickname(it["author_id"]) or it["author_name"] or "未知博主"
     if m["mix_id"] in MIX_PROGRESS:
         return {"ok": True, "total": m["total"], "mix_name": m["mix_name"], "already": True}
     # 抓集 + 下载都放后台，接口立即返回（集数用合集元数据里的 total）
-    asyncio.create_task(_download_mix_bg(m["mix_id"], m["mix_name"], nickname, m["total"]))
+    asyncio.create_task(_download_mix_bg(m["mix_id"], m["mix_name"], nickname, m["total"], platform))
     return {"ok": True, "total": m["total"], "mix_name": m["mix_name"]}
 
 
-async def _download_mix_bg(mix_id, mix_name, nickname, total_hint):
+async def _download_mix_bg(mix_id, mix_name, nickname, total_hint, platform="douyin"):
+    ad = get_adapter(platform)
     MIX_PROGRESS[mix_id] = {"name": mix_name, "done": 0, "total": total_hint or 0}
     episodes = []
     try:
-        kw = make_kwargs()
-        kw["timeout"] = 10   # 缩短翻页间隔
-        h = DouyinHandler(kw)
-        async for mx in h.fetch_user_mix_videos(mix_id=mix_id, page_counts=20, max_counts=500):
-            episodes.extend(mx._to_raw().get("aweme_list") or [])
+        episodes = await ad.mix(_cookie(platform), mix_id, max_count=500)
     except Exception as e:
         log_err(f"抓合集失败: {e}")
     if episodes:
         MIX_PROGRESS[mix_id]["total"] = len(episodes)
     failed = 0
     for ep in episodes:
-        aid = str(ep.get("aweme_id"))
+        aid = ad.normalize(ep)["aweme_id"]
         ok = False
         for attempt in range(2):   # 失败重试一次（限流常是偶发）
             try:
-                aw = ep if _has_media(ep) else None
+                aw = ep if _has_media(ep, platform) else None
                 if aw is None:
-                    v = await DouyinHandler(make_kwargs()).fetch_one_video(aweme_id=aid)
-                    aw = (v._to_raw() or {}).get("aweme_detail")
+                    aw = await resolve_aweme(aid, platform)
                 if aw:
-                    ok, _ = await download_aweme_media(nickname, aw)
+                    ok, _ = await download_aweme_media(nickname, aw, platform)
                 if ok:
                     break
             except Exception as e:
@@ -820,10 +766,17 @@ class DiscoverBody(BaseModel):
     hours: int = 24           # 只要最近 N 小时内发布的
     min_like: int = 20000     # 点赞门槛（代理播放量）
     pages: int = 2            # 每个种子抓几页相关推荐（每页约20条，页间有30秒防风控间隔）
+    platform: str = "douyin"
 
 
 @app.post("/api/discover")
 async def api_discover(body: DiscoverBody):
+    platform = body.platform or "douyin"
+    if platform != "douyin":
+        return JSONResponse(
+            {"error": "「发现」基于抖音的相关推荐，暂只支持抖音。TikTok 请用「库内查找」或「博主监控」。"},
+            status_code=400)
+    ad = get_adapter(platform)
     seeds = [s for s in (body.seeds or []) if s.strip()]
     if not seeds:
         return JSONResponse({"error": "请至少粘贴一条种子视频链接"}, status_code=400)
@@ -835,62 +788,70 @@ async def api_discover(body: DiscoverBody):
     scanned = 0
 
     for seed in seeds:
-        aid = await resolve_aweme_id(seed)
+        aid = await resolve_aweme_id(seed, platform)
         if not aid:
             log_err(f"发现：种子无法解析 {seed[:40]}")
             continue
         try:
-            h = DouyinHandler(make_kwargs())
+            h = ad.handler(_cookie(platform))
             async for rel in h.fetch_related_videos(aweme_id=aid, page_counts=20, max_counts=pages * 20):
                 for a in (rel._to_raw().get("aweme_list") or []):
                     scanned += 1
-                    rid = str(a.get("aweme_id"))
+                    it = ad.normalize(a)
+                    rid = it["aweme_id"]
                     if rid in found:
                         continue
-                    ct = a.get("create_time") or 0
+                    ct = it["create_time"]
                     age_h = (now - ct) / 3600 if ct else 1e9
-                    digg = (a.get("statistics") or {}).get("digg_count") or 0
+                    digg = it["digg"]
                     if (body.hours and age_h > body.hours) or digg < body.min_like:
                         continue
-                    author = a.get("author") or {}
-                    nick = author.get("nickname") or "未知博主"
+                    nick = it["author_name"] or "未知博主"
                     if nick not in seen_authors_tags:
-                        seen_authors_tags[nick] = _downloaded_tags(nick)
+                        seen_authors_tags[nick] = _downloaded_tags(nick, platform)
                     cache[rid] = a
-                    dur = (a.get("video") or {}).get("duration") or 0
+                    dur = it["duration_ms"]
                     found[rid] = {
                         "aweme_id": rid,
-                        "desc": (a.get("desc") or "").strip() or "(无标题)",
+                        "desc": it["desc"] or "(无标题)",
                         "author": nick,
-                        "sec_user_id": author.get("sec_uid") or "",
-                        "type": "图集" if a.get("images") else "视频",
-                        "cover": pick_cover_url(a) or "",
+                        "sec_user_id": it["author_id"],
+                        "type": "图集" if it["is_images"] else "视频",
+                        "cover": it["cover"] or "",
                         "digg": digg,
+                        "comment": it["comment"], "share": it["share"], "collect": it["collect"],
                         "create_time": fmt_ts(ct),
                         "age_hours": round(age_h, 1),
                         "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
                         "downloaded": rid[-6:] in seen_authors_tags[nick],
-                        "is_monitored": any(b["sec_user_id"] == author.get("sec_uid") for b in config["bloggers"]),
+                        "is_monitored": any(b["sec_user_id"] == it["author_id"]
+                                            and b.get("platform", "douyin") == platform
+                                            for b in config["bloggers"]),
+                        **rank_metrics(it, age_h, _to_int(it.get("author_follower"))),
                     }
         except Exception as e:
             log_err(f"发现：抓取相关推荐失败 {e}")
 
     items = sorted(found.values(), key=lambda x: x["digg"], reverse=True)
-    return {"scanned": scanned, "hours": body.hours, "min_like": body.min_like, "count": len(items), "items": items}
+    return {"scanned": scanned, "hours": body.hours, "min_like": body.min_like,
+            "count": len(items), "items": items}
 
 
 class LibrarySearchBody(BaseModel):
     hours: int = 24
     min_like: int = 20000
     scan: int = 20   # 免登录每个博主最多约20条可见，翻页无效，不做无谓翻页
+    platform: str = "douyin"
 
 
 @app.post("/api/library_search")
 async def api_library_search(body: LibrarySearchBody):
     """库里博主：时间窗内的作品，按点赞从高到低排，取前 N。
-    提速：14 个博主并发抓 + 按时间窗智能停页（够准又快）。"""
+    提速：博主并发抓 + 按时间窗智能停页（够准又快）。只查当前平台的博主。"""
+    platform = body.platform or "douyin"
+    ad = get_adapter(platform)
     now = time.time()
-    bloggers = list(config["bloggers"])
+    bloggers = [b for b in config["bloggers"] if b.get("platform", "douyin") == platform]
     hours = body.hours
     sem = asyncio.Semaphore(4)   # 并发上限压低：登录账号并发太多易被判机器人→封号
 
@@ -900,37 +861,40 @@ async def api_library_search(body: LibrarySearchBody):
         async with sem:
             try:
                 if hours:   # 有时间窗：抓到超出范围就停
-                    awemes = await fetch_posts_windowed(sec_uid, hours, max_pages=8)
+                    awemes = await fetch_posts_windowed(sec_uid, hours, max_pages=8, platform=platform)
                 else:       # 不限时间：抓最新一页够排序
-                    awemes = await fetch_posts_raw(sec_uid, max_count=20)
+                    awemes = await fetch_posts_raw(sec_uid, max_count=20, platform=platform)
             except Exception as e:
                 log_err(f"库内查找 {nickname} 失败: {e}")
                 return []
         cache = POSTS_CACHE.setdefault(sec_uid, {})
-        tags = _downloaded_tags(nickname)
+        tags = _downloaded_tags(nickname, platform)
+        follower = _to_int(b.get("follower_count"))
         out = []
         for a in awemes:
-            ct = a.get("create_time") or 0
+            it = ad.normalize(a)
+            ct = it["create_time"]
             age_h = (now - ct) / 3600 if ct else 1e9
             if hours and age_h > hours:
                 continue
-            digg = (a.get("statistics") or {}).get("digg_count") or 0
-            aid = str(a.get("aweme_id"))
+            aid = it["aweme_id"]
             cache[aid] = a
-            dur = (a.get("video") or {}).get("duration") or 0
+            dur = it["duration_ms"]
             out.append({
                 "aweme_id": aid,
-                "desc": (a.get("desc") or "").strip() or "(无标题)",
+                "desc": it["desc"] or "(无标题)",
                 "author": nickname,
                 "sec_user_id": sec_uid,
-                "type": "图集" if a.get("images") else "视频",
-                "cover": pick_cover_url(a) or "",
-                "digg": digg,
+                "type": "图集" if it["is_images"] else "视频",
+                "cover": it["cover"] or "",
+                "digg": it["digg"],
+                "comment": it["comment"], "share": it["share"], "collect": it["collect"],
                 "create_time": fmt_ts(ct),
                 "age_hours": round(age_h, 1),
                 "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
                 "downloaded": aid[-6:] in tags,
                 "is_monitored": True,
+                **rank_metrics(it, age_h, follower),
             })
         return out
 
@@ -944,11 +908,12 @@ async def api_library_search(body: LibrarySearchBody):
 
 
 @app.get("/api/downloads")
-def api_downloads():
+def api_downloads(platform: str = "douyin"):
     groups = []
-    dl = get_dl()
-    if dl.exists():
-        for d in sorted(dl.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+    base = get_dl()
+    root = platform_dir(platform)
+    if root.exists():
+        for d in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if not d.is_dir():
                 continue
             files = []
@@ -956,7 +921,7 @@ def api_downloads():
                 if f.is_file() and not f.name.endswith(".part"):
                     files.append({
                         "name": f.name,
-                        "url": f"/files/{d.name}/{f.name}",
+                        "url": f"/files/{f.relative_to(base).as_posix()}",
                         "size": round(f.stat().st_size / 1024 / 1024, 2),
                         "is_video": f.suffix.lower() == ".mp4",
                     })
@@ -972,10 +937,10 @@ def api_reveal():
 
 
 @app.post("/api/reveal_blogger/{name}")
-def api_reveal_blogger(name: str):
-    dl = get_dl()
-    target = dl / sanitize(name, 30)
-    os.startfile(str(target if target.exists() else dl))
+def api_reveal_blogger(name: str, platform: str = "douyin"):
+    root = platform_dir(platform)
+    target = root / sanitize(name, 30)
+    os.startfile(str(target if target.exists() else root))
     return {"ok": True}
 
 
@@ -1020,6 +985,7 @@ def api_choose_dir():
 
 class CookieBody(BaseModel):
     cookie: str
+    platform: str = "douyin"
 
 
 @app.post("/api/set_cookie")
@@ -1027,56 +993,57 @@ def api_set_cookie(body: CookieBody):
     c = (body.cookie or "").strip()
     if "sessionid" not in c:
         return JSONResponse({"error": "这段 cookie 里没有 sessionid，可能没登录成功"}, status_code=400)
-    set_login_cookie(c)
+    set_login_cookie(c, body.platform or "douyin")
     return {"ok": True, "logged_in": True}
 
 
 @app.post("/api/logout")
-def api_logout():
-    clear_login_cookie()
+def api_logout(platform: str = "douyin"):
+    clear_login_cookie(platform)
     return {"ok": True, "logged_in": False}
 
 
 @app.post("/api/login_qr")
-def api_login_qr():
-    """触发桌面端弹出抖音登录窗口扫码（由 desktop.py 注入的回调实现）"""
+def api_login_qr(platform: str = "douyin"):
+    """触发桌面端弹出登录窗口扫码（由 desktop.py 注入的回调实现）"""
     cb = globals().get("_login_callback")
     if not cb:
         return JSONResponse(
             {"error": "扫码登录仅桌面版可用。请改用「粘贴 Cookie 登录」，或在设置里从浏览器导入。"},
             status_code=400)
     try:
-        ok = cb()  # 阻塞直到扫码完成或超时
-        return {"ok": bool(ok), "logged_in": is_logged_in()}
+        ok = cb(platform)  # 阻塞直到扫码完成或超时
+        return {"ok": bool(ok), "logged_in": is_logged_in(platform)}
     except Exception as e:
         return JSONResponse({"error": f"登录失败: {e}"}, status_code=400)
 
 
 @app.post("/api/login_browser")
-def api_login_browser():
-    """从系统浏览器(Chrome/Edge/Firefox)读取已登录的抖音 cookie"""
+def api_login_browser(platform: str = "douyin"):
+    """从系统浏览器(Chrome/Edge/Firefox)读取已登录的 cookie"""
     try:
         import browser_cookie3 as bc
     except Exception:
         return JSONResponse({"error": "缺少 browser_cookie3"}, status_code=400)
+    domain = {"douyin": "douyin.com", "tiktok": "tiktok.com"}.get(platform, "douyin.com")
     for name in ("edge", "chrome", "firefox"):
         try:
-            cj = getattr(bc, name)(domain_name="douyin.com")
+            cj = getattr(bc, name)(domain_name=domain)
             jar = {c.name: c.value for c in cj}
             if "sessionid" in jar:
-                set_login_cookie("; ".join(f"{k}={v}" for k, v in jar.items()))
+                set_login_cookie("; ".join(f"{k}={v}" for k, v in jar.items()), platform)
                 return {"ok": True, "logged_in": True, "source": name}
         except Exception:
             continue
     return JSONResponse(
-        {"error": "没在浏览器里找到已登录的抖音 cookie。请先在 Chrome/Edge 里登录 douyin.com 再点此按钮。"},
+        {"error": f"没在浏览器里找到已登录的 {domain} cookie。请先在 Chrome/Edge 里登录 {domain} 再点此按钮。"},
         status_code=400)
 
 
 @app.get("/api/export_bloggers")
 def api_export_bloggers():
     """导出监控博主列表（不含任何登录/密钥信息）"""
-    keys = ("sec_user_id", "nickname", "avatar", "follower_count", "aweme_count", "signature")
+    keys = ("sec_user_id", "platform", "nickname", "avatar", "follower_count", "aweme_count", "signature")
     return {
         "app": "爆款监控",
         "type": "bloggers",
@@ -1118,20 +1085,22 @@ class ImportBody(BaseModel):
 
 @app.post("/api/import_bloggers")
 def api_import_bloggers(body: ImportBody):
-    keys = ("sec_user_id", "nickname", "avatar", "follower_count", "aweme_count", "signature")
+    keys = ("sec_user_id", "platform", "nickname", "avatar", "follower_count", "aweme_count", "signature")
     if body.mode == "replace":
         config["bloggers"] = []
-    existing = {b["sec_user_id"] for b in config["bloggers"]}
+    existing = {(b["sec_user_id"], b.get("platform", "douyin")) for b in config["bloggers"]}
     added = 0
     for b in body.bloggers or []:
         sid = (b or {}).get("sec_user_id")
-        if not sid or not str(sid).startswith("MS4wLjAB") or sid in existing:
+        pf = (b or {}).get("platform") or "douyin"
+        if not sid or not str(sid).startswith("MS4wLjAB") or (sid, pf) in existing:
             continue
         rec = {k: b.get(k) for k in keys}
+        rec["platform"] = pf
         rec["notify"] = True
         rec["added_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         config["bloggers"].append(rec)
-        existing.add(sid)
+        existing.add((sid, pf))
         added += 1
     if added or body.mode == "replace":
         _save(CONFIG_FILE, config)
