@@ -158,10 +158,13 @@ class DouyinAdapter(BaseAdapter):
             kw["timeout"] = 5
         h = DouyinHandler(kw)
         out = []
-        async for posts in h.fetch_user_post_videos(sec_user_id=uid, page_counts=20, max_counts=max_count):
-            out.extend(posts._to_raw().get("aweme_list") or [])
-            if len(out) >= max_count:
-                break
+        try:
+            async for posts in h.fetch_user_post_videos(sec_user_id=uid, page_counts=20, max_counts=max_count):
+                out.extend(posts._to_raw().get("aweme_list") or [])
+                if len(out) >= max_count:
+                    break
+        except UnboundLocalError:
+            pass   # f2 bug：空作品号收尾发通知时引用未定义的 nickname_raw；作品已收完，忽略
         return out[:max_count]
 
     async def posts_pages(self, cookie, uid, max_pages=8, page_timeout=5):
@@ -169,8 +172,11 @@ class DouyinAdapter(BaseAdapter):
         kw = self.make_kwargs(cookie)
         kw["timeout"] = page_timeout
         h = DouyinHandler(kw)
-        async for posts in h.fetch_user_post_videos(sec_user_id=uid, page_counts=20, max_counts=max_pages * 20):
-            yield posts._to_raw().get("aweme_list") or []
+        try:
+            async for posts in h.fetch_user_post_videos(sec_user_id=uid, page_counts=20, max_counts=max_pages * 20):
+                yield posts._to_raw().get("aweme_list") or []
+        except UnboundLocalError:
+            return   # 同上：f2 收尾通知崩，作品已产出完，正常结束
 
     async def one_video(self, cookie, aid) -> dict:
         v = await self.handler(cookie).fetch_one_video(aweme_id=str(aid))
@@ -181,8 +187,11 @@ class DouyinAdapter(BaseAdapter):
         kw["timeout"] = 10
         h = DouyinHandler(kw)
         out = []
-        async for mx in h.fetch_user_mix_videos(mix_id=mix_id, page_counts=20, max_counts=max_count):
-            out.extend(mx._to_raw().get("aweme_list") or [])
+        try:
+            async for mx in h.fetch_user_mix_videos(mix_id=mix_id, page_counts=20, max_counts=max_count):
+                out.extend(mx._to_raw().get("aweme_list") or [])
+        except UnboundLocalError:
+            pass
         return out
 
     def normalize(self, a: dict) -> dict:
@@ -285,20 +294,26 @@ class TiktokAdapter(BaseAdapter):
     async def posts(self, cookie, uid, max_count=20) -> list:
         h = self.handler(cookie)
         out = []
-        async for posts in h.fetch_user_post_videos(secUid=uid, cursor=0, min_cursor=0,
-                                                    page_counts=20, max_counts=max_count):
-            out.extend(posts._to_raw().get("itemList") or [])
-            if len(out) >= max_count:
-                break
+        try:
+            async for posts in h.fetch_user_post_videos(secUid=uid, cursor=0, min_cursor=0,
+                                                        page_counts=20, max_counts=max_count):
+                out.extend(posts._to_raw().get("itemList") or [])
+                if len(out) >= max_count:
+                    break
+        except UnboundLocalError:
+            pass   # 同抖音：f2 空作品号收尾通知 bug，作品已收完，忽略
         return out[:max_count]
 
     async def posts_pages(self, cookie, uid, max_pages=8, page_timeout=5):
         kw = self.make_kwargs(cookie)
         kw["timeout"] = page_timeout
         h = _tt()["Handler"](kw)
-        async for posts in h.fetch_user_post_videos(secUid=uid, cursor=0, min_cursor=0,
-                                                    page_counts=20, max_counts=max_pages * 20):
-            yield posts._to_raw().get("itemList") or []
+        try:
+            async for posts in h.fetch_user_post_videos(secUid=uid, cursor=0, min_cursor=0,
+                                                        page_counts=20, max_counts=max_pages * 20):
+                yield posts._to_raw().get("itemList") or []
+        except UnboundLocalError:
+            return
 
     async def one_video(self, cookie, aid) -> dict:
         v = await self.handler(cookie).fetch_one_video(itemId=str(aid))
@@ -308,8 +323,11 @@ class TiktokAdapter(BaseAdapter):
     async def mix(self, cookie, mix_id, max_count=500) -> list:
         h = self.handler(cookie)
         out = []
-        async for mx in h.fetch_user_mix_videos(mixId=mix_id, cursor=0, page_counts=20, max_counts=max_count):
-            out.extend(mx._to_raw().get("itemList") or [])
+        try:
+            async for mx in h.fetch_user_mix_videos(mixId=mix_id, cursor=0, page_counts=20, max_counts=max_count):
+                out.extend(mx._to_raw().get("itemList") or [])
+        except UnboundLocalError:
+            pass
         return out
 
     def normalize(self, a: dict) -> dict:
