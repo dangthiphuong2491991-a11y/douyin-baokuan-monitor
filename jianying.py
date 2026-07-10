@@ -125,3 +125,133 @@ def list_drafts() -> list:
     except Exception:
         pass
     return out
+
+
+# ---------------- 混剪合成 ----------------
+import copy
+import random
+import shutil
+import time
+import uuid
+
+
+def _new_id() -> str:
+    return str(uuid.uuid4()).upper()
+
+
+def _probe(clip):
+    """拿视频 (时长微秒, 宽, 高)。用 pyJianYingDraft 的探测。"""
+    import pyJianYingDraft as pjd
+    m = pjd.VideoMaterial(clip)
+    return int(m.duration), int(getattr(m, "width", 0) or 1080), int(getattr(m, "height", 0) or 1920)
+
+
+def compose_one(template_name, clip_paths, out_name, speed_range=(0.9, 1.0)):
+    """以 template_name 为模板，把 clip_paths 塞进主视频轨道生成新草稿。
+    做法：克隆模板自己的片段/素材原型（schema 天然匹配本版剪映），只改 路径/时长/速度。"""
+    tj = read_draft_json(template_name)
+    mats = tj["materials"]
+    main = next((t for t in tj["tracks"] if t.get("type") == "video"), None)
+    if not main or not main.get("segments"):
+        raise RuntimeError("模板主轨道没有视频片段可参照（换个有视频的模板）")
+
+    proto_seg = copy.deepcopy(main["segments"][0])
+    proto_mat = next((m for m in mats.get("videos", []) if m.get("id") == proto_seg.get("material_id")), None)
+    if not proto_mat:
+        raise RuntimeError("模板片段找不到对应视频素材")
+    ref_ids = set(proto_seg.get("extra_material_refs", []))       # 6 个附属素材（speed/canvas/音轨映射…）
+    aux_protos = {}   # category -> 原型素材
+    for cat, items in mats.items():
+        if isinstance(items, list):
+            for it in items:
+                if it.get("id") in ref_ids:
+                    aux_protos[cat] = it
+
+    new_segs = []
+    cursor = 0
+    for clip in clip_paths:
+        dur_us, w, h = _probe(clip)
+        lo, hi = speed_range
+        spd = round(random.uniform(lo, hi), 3) if lo != hi else lo
+        spd = max(0.5, min(2.0, spd or 1.0))
+        play_us = int(dur_us / spd)
+        # 新视频素材（克隆原型，改路径/时长/尺寸）
+        nm = copy.deepcopy(proto_mat)
+        nm.update(id=_new_id(), path=clip.replace("\\", "/"), duration=dur_us, width=w, height=h,
+                  material_name=os.path.basename(clip), has_audio=True,
+                  material_id="", local_material_id="", category_name="", category_id="", crop={})
+        mats["videos"].append(nm)
+        # 每个片段独立克隆一套附属素材，speed 类设成本片段速度
+        new_refs = []
+        for cat, proto in aux_protos.items():
+            na = copy.deepcopy(proto)
+            na["id"] = _new_id()
+            if cat == "speeds":
+                na["speed"] = spd
+                if isinstance(na.get("curve_speed"), dict):
+                    na["curve_speed"] = None
+            mats.setdefault(cat, []).append(na)
+            new_refs.append(na["id"])
+        # 新片段
+        ns = copy.deepcopy(proto_seg)
+        ns.update(id=_new_id(), material_id=nm["id"], extra_material_refs=new_refs,
+                  source_timerange={"start": 0, "duration": dur_us},
+                  target_timerange={"start": cursor, "duration": play_us},
+                  render_timerange={})
+        new_segs.append(ns)
+        cursor += play_us
+
+    main["segments"] = new_segs
+    tj["duration"] = cursor
+    _write_draft(template_name, out_name, tj)
+    return out_name
+
+
+def _write_draft(template_name, out_name, content):
+    root = draft_root()
+    src = os.path.join(root, template_name)
+    dst = os.path.join(root, out_name)
+    if os.path.exists(dst):
+        shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src, dst)                              # 整份复制模板(含封面/资源)
+    fold = dst.replace("\\", "/")
+    now = int(time.time() * 1e6)
+    dur = content.get("duration", 0)
+    # 覆盖 draft_content.json（加密）
+    content["path"] = fold
+    with open(os.path.join(dst, "draft_content.json"), "wb") as f:
+        f.write(encrypt(json.dumps(content, ensure_ascii=False)))
+    for bak in ("draft_content.json.bak",):
+        bp = os.path.join(dst, bak)
+        if os.path.exists(bp):
+            os.remove(bp)
+    # 更新 draft_meta_info.json（加密）
+    new_id = _new_id()
+    mp = os.path.join(dst, "draft_meta_info.json")
+    mraw = open(mp, "rb").read()
+    meta = json.loads(mraw) if mraw.lstrip()[:1] in (b"{", b"[") else json.loads(decrypt(mraw))
+    meta.update(draft_id=new_id, draft_name=out_name, draft_fold_path=fold,
+                tm_draft_create=now, tm_draft_modified=now, tm_duration=dur)
+    with open(mp, "wb") as f:
+        f.write(encrypt(json.dumps(meta, ensure_ascii=False)))
+    _register(template_name, out_name, new_id, fold, now, dur)
+
+
+def _register(template_name, out_name, new_id, fold, now, dur):
+    """注册进 root_meta_info.json（剪映靠它显示草稿列表）。先备份，防改坏。"""
+    rp = os.path.join(draft_root(), "root_meta_info.json")
+    try:
+        shutil.copy(rp, rp + ".bak")
+    except Exception:
+        pass
+    rm = json.load(open(rp, encoding="utf-8"))
+    store = rm.setdefault("all_draft_store", [])
+    store[:] = [x for x in store if x.get("draft_name") != out_name]     # 去掉同名旧的
+    tpl = next((x for x in store if x.get("draft_name") == template_name), None) or (store[0] if store else {})
+    e = copy.deepcopy(tpl)
+    e.update(draft_id=new_id, draft_name=out_name, draft_fold_path=fold,
+             draft_cover=fold + "/draft_cover.jpg",
+             tm_draft_create=now, tm_draft_modified=now, tm_draft_removed=0, tm_duration=dur)
+    store.insert(0, e)
+    with open(rp, "w", encoding="utf-8") as f:
+        json.dump(rm, f, ensure_ascii=False)
