@@ -1,6 +1,6 @@
 {
-  "version": "1.0.11",
-  "notes": "① 下载任务中心：所有下载统一排队，失败一键重试；② 合集追更：下过的合集自动盯更新，出新集弹窗、一键补齐只下缺的集；③ 合集按集数命名：下成 1.mp4/2.mp4，每部短剧单独一个文件夹，用抖音真实集数（付费缺集也不错位）；④ 起飞预警：新作品涨赞速度超阈值弹窗（带走势线）；⑤ 每日爆款日报：到点自动汇总弹窗；⑥ 修复监控空作品/私密号博主时的崩溃。",
+  "version": "1.0.12",
+  "notes": "① 合集「已下载」标志：查找视频时，属于下过的合集会一眼标出已下载；出了新集会显示「🆕补齐 N 集」，一键只补缺的集；② 下载不再存封面 jpg，文件夹更干净、只留视频正片；③ 下载库/视频去重/视频号发布全部改成 Windows 风格文件夹：下载库点文件夹进出浏览，去重和发布直接点整个文件夹选中；④ 发现爆款默认改成「总点赞榜」。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.11/BaokuanMonitor.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.12/BaokuanMonitor.exe"
 }

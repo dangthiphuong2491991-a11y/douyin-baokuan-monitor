@@ -106,6 +106,29 @@
   .dlgrp .h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
   .dlgrp .h .nm{font-weight:700;font-size:16px}
   .dlgrp .h .c{color:var(--sub);font-size:12.5px}
+  /* 下载库：文件夹折叠行 */
+  .libgrp{margin-bottom:10px}
+  .libhead{display:flex;align-items:center;gap:11px;padding:13px 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;cursor:pointer;transition:.13s}
+  .libhead:hover{border-color:var(--acc)}
+  .libhead.open{border-color:var(--acc);border-bottom-left-radius:0;border-bottom-right-radius:0}
+  .libhead .tw{color:var(--sub);font-size:12px;width:12px}
+  .libhead .ico{font-size:18px}
+  .libhead .nm{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
+  .libhead .meta{color:var(--sub);font-size:12.5px}
+  .libhead .btn{margin-left:auto;padding:6px 12px}
+  .libgrp .grid{padding:12px;border:1px solid var(--acc);border-top:0;border-radius:0 0 12px 12px;background:rgba(255,255,255,.02)}
+  /* Windows 风格文件夹图标网格 */
+  .foldgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:14px}
+  .foldtile{position:relative;padding:16px 12px 12px;border:1px solid transparent;border-radius:12px;background:transparent;cursor:pointer;text-align:center;transition:.12s}
+  .foldtile:hover{background:rgba(255,255,255,.05);border-color:var(--line)}
+  .foldtile.sel{background:rgba(124,110,255,.14);border-color:var(--acc)}
+  .foldtile .fsvg{width:74px;height:60px;display:block;margin:0 auto 9px;filter:drop-shadow(0 4px 6px rgba(0,0,0,.35))}
+  .foldtile .foldname{font-weight:600;font-size:13px;line-height:1.35;max-height:2.7em;overflow:hidden;word-break:break-all}
+  .foldtile .foldsub{color:var(--sub);font-size:11.5px;margin-top:4px}
+  .foldtile .foldcheck{position:absolute;top:9px;right:9px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.4);border:2px solid #fff;color:transparent;font-size:12px;font-weight:bold;display:grid;place-items:center;transition:.12s}
+  .foldtile.sel .foldcheck{background:var(--acc);border-color:var(--acc);color:#fff}
+  .foldtile.part .foldcheck{background:var(--acc2);border-color:var(--acc2);color:#fff}
+  .drillbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
   .dl{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.15s}
   .dl:hover{transform:translateY(-3px);border-color:var(--acc)}
@@ -146,6 +169,11 @@
   .post.done{opacity:.68}
   .post .pcap{padding:8px 10px 2px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .post .pstat{padding:0 10px 9px;font-size:12px;color:var(--sub)}
+  /* 合集状态小条 */
+  .post .pmix{margin:0 10px 9px;padding:5px 8px;border-radius:7px;background:rgba(255,255,255,.05);border:1px solid var(--line);font-size:11px;color:var(--sub);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .post .pmix.has{background:rgba(240,170,60,.12);border-color:rgba(240,170,60,.45);color:#f0aa3c}
+  .post .pmix .mixnew{margin-left:auto;background:var(--acc2);color:#fff;border:0;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer}
+  .post .pmix .mixnew:hover{filter:brightness(1.08)}
   /* 播放按钮浮标 */
   .playbtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center;font-size:17px;padding-left:3px;pointer-events:none;transition:.15s}
   .cov{cursor:pointer}
@@ -311,7 +339,7 @@
           <label style="color:var(--sub);font-size:13px">排序榜
             <select id="discSort" onchange="renderDisc()" style="margin-left:6px">
               <option value="vel">⚡ 涨赞速度榜</option>
-              <option value="digg">👍 总点赞榜</option>
+              <option value="digg" selected>👍 总点赞榜</option>
               <option value="dark">🐴 黑马榜</option>
               <option value="qual">💬 互动质量榜</option>
             </select>
@@ -956,27 +984,49 @@ async function unfollowMix(mixId){
   await api('/api/mix_follows/'+encodeURIComponent(mixId),'DELETE'); loadMixFollows();
 }
 
+let libGroups=[], libDrill=null;   // libDrill=进入了的文件夹下标（null=看文件夹网格）
 async function loadLib(){
   loadMixFollows();
   const box = document.getElementById('libBox');
   box.innerHTML = '<div class="empty">加载中…</div>';
   try{
     const {groups} = await api('/api/downloads?platform='+PLATFORM);
-    let total = groups.reduce((s,g)=>s+g.count,0);
-    document.getElementById('stFiles').textContent = total;
-    box.innerHTML = groups.length ? groups.map(g=>`
-      <div class="dlgrp">
-        <div class="h"><span class="nm">${g.is_mix?'📺':'📁'} ${esc(g.blogger)}</span><span class="c">${g.count} ${g.is_mix?'集':'个文件'}</span>
-          <button class="btn ghost" style="margin-left:auto;padding:6px 12px" onclick='revealFolder(${JSON.stringify(g.blogger)},${JSON.stringify(g.rel||"")})'>打开文件夹</button></div>
-        <div class="grid">${g.files.map(f=>`
-          <div class="dl" onclick="${f.is_video?`openPlayer('','${esc(dlLabel(f,g.is_mix))}','${esc(dlLabel(f,g.is_mix)).replace(/'/g,"\\'")}','${esc(f.url)}')`:`window.open('${esc(f.url)}')`}">
-            ${f.is_video
-              ? `<div class="thumb" style="display:grid;place-items:center;position:relative">${g.is_mix?`<span style="font-size:22px;font-weight:800;color:var(--acc2)">${esc(dlLabel(f,true))}</span>`:'<span style="font-size:34px">🎬</span>'}<span class="playbtn" style="font-size:14px">▶</span></div>`
-              : `<img class="thumb" src="${esc(f.url)}">`}
-            <div class="cap">${f.is_video?'▶ ':''}${g.is_mix?esc(dlLabel(f,true))+' · ':''}<b>${f.size}</b> MB</div>
-          </div>`).join('')}</div>
-      </div>`).join('') : emptyBox('📦','下载库还是空的','发现新作品后会自动下载到这里');
+    libGroups = groups; libDrill=null;   // 默认看文件夹网格
+    document.getElementById('stFiles').textContent = groups.reduce((s,g)=>s+g.count,0);
+    renderLib();
   }catch(e){ box.innerHTML = emptyBox('⚠','加载失败',e.message) }
+}
+
+function _grpSize(g){ return g.files.reduce((s,f)=>s+(f.size||0),0); }
+function _fmtMB(mb){ return mb>=1024?(mb/1024).toFixed(2)+' GB':mb.toFixed(1)+' MB'; }
+
+function renderLib(){
+  const box=document.getElementById('libBox');
+  if(!libGroups.length){ box.innerHTML=emptyBox('📦','下载库还是空的','发现新作品后会自动下载到这里'); return; }
+  if(libDrill!=null){          // 进入某个文件夹：显示里面的视频 + 返回按钮
+    const g=libGroups[libDrill];
+    if(!g){ libDrill=null; return renderLib(); }
+    box.innerHTML=`<div class="drillbar">
+        <button class="btn ghost" onclick="libDrill=null;renderLib()">← 返回文件夹</button>
+        <span style="font-weight:700;font-size:15px">${g.is_mix?'📺':'📁'} ${esc(g.blogger)}</span>
+        <span style="color:var(--sub);font-size:12.5px">${g.count} ${g.is_mix?'集':'个'} · ${_fmtMB(_grpSize(g))}</span>
+        <button class="btn ghost" style="margin-left:auto" onclick='revealFolder(${JSON.stringify(g.blogger)},${JSON.stringify(g.rel||"")})'>打开文件夹</button>
+      </div>
+      <div class="grid">${g.files.map(f=>`
+        <div class="dl" onclick="${f.is_video?`openPlayer('','${esc(dlLabel(f,g.is_mix))}','${esc(dlLabel(f,g.is_mix)).replace(/'/g,"\\'")}','${esc(f.url)}')`:`window.open('${esc(f.url)}')`}">
+          ${f.is_video
+            ? `<div class="thumb" style="display:grid;place-items:center;position:relative">${g.is_mix?`<span style="font-size:22px;font-weight:800;color:var(--acc2)">${esc(dlLabel(f,true))}</span>`:'<span style="font-size:34px">🎬</span>'}<span class="playbtn" style="font-size:14px">▶</span></div>`
+            : `<img class="thumb" src="${esc(f.url)}">`}
+          <div class="cap">${f.is_video?'▶ ':''}${g.is_mix?esc(dlLabel(f,true))+' · ':''}<b>${f.size}</b> MB</div>
+        </div>`).join('')}</div>`;
+    return;
+  }
+  box.innerHTML=`<div class="foldgrid">${libGroups.map((g,i)=>`
+    <div class="foldtile" onclick="libDrill=${i};renderLib()" title="${esc(g.blogger)}">
+      ${FOLDER_SVG}
+      <div class="foldname">${esc(g.blogger)}</div>
+      <div class="foldsub">${g.count} ${g.is_mix?'集':'个'} · ${_fmtMB(_grpSize(g))}</div>
+    </div>`).join('')}</div>`;
 }
 
 /* ---- 任务中心 ---- */
@@ -1079,8 +1129,42 @@ function startJyPoll(){
     if(pg&&pg.classList.contains('on')) jyPoll(); else{ clearInterval(jyTimer); jyTimer=null; } },2500);
 }
 
+/* ---- 视频选择器：Windows 风格文件夹图标，点文件夹=整个文件夹选中 ---- */
+// Windows 风格黄色文件夹图标（后片深、前盖浅）
+const FOLDER_SVG=`<svg class="fsvg" viewBox="0 0 64 52" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 5h15.5a4 4 0 0 1 3 1.4l3.2 3.8a2 2 0 0 0 1.5.7H58a4 4 0 0 1 4 4v8H2V9a4 4 0 0 1 4-4z" fill="#E0982B"/>
+  <path d="M2 17.5h60V44a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4z" fill="#F6C24E"/>
+</svg>`;
+function _folderKey(v){ return v.mix ? (v.blogger+' › '+v.mix) : (v.blogger||'(未分类)'); }
+function _grpVideos(videos){
+  const m=new Map();
+  (videos||[]).forEach(v=>{
+    const key=_folderKey(v);
+    if(!m.has(key)) m.set(key,{key, is_mix:!!v.mix, videos:[]});
+    m.get(key).videos.push(v);
+  });
+  return [...m.values()];
+}
+function _folderVideos(videos, key){ return (videos||[]).filter(v=>_folderKey(v)===key); }
+// cfg = {onClick:'fn名', state:(g)=>'none'|'some'|'all'}  —— 点文件夹整包选/取消
+function vidFoldersHTML(videos, cfg){
+  const grps=_grpVideos(videos);
+  if(!grps.length) return emptyBox('📭','下载库没有视频','先去下载一些视频');
+  return `<div class="foldgrid">${grps.map(g=>{
+    const st=cfg.state?cfg.state(g):'none';
+    const cls=st==='all'?'sel':(st==='some'?'part':'');
+    const nsel=g.videos.filter(v=>cfg.isSel&&cfg.isSel(v)).length;
+    return `<div class="foldtile ${cls}" onclick='${cfg.onClick}(${JSON.stringify(g.key)})' title="${esc(g.key)}">
+      ${FOLDER_SVG}
+      <span class="foldcheck">✓</span>
+      <div class="foldname">${esc(g.key)}</div>
+      <div class="foldsub">${g.videos.length} 个视频${st==='some'?` · 选了 ${nsel}`:''}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 /* ---- 视频去重 ---- */
-let ddVideos=[], ddPick=new Set(), ddTimer=null;
+let ddVideos=[], ddPick=new Set(), ddTimer=null, ddOpen=new Set();
 function openDedup(){ loadDdVideos(); startDedupPoll(); }
 async function loadDdVideos(){
   const grid=document.getElementById('ddVideoGrid');
@@ -1094,16 +1178,20 @@ async function loadDdVideos(){
 }
 function renderDdGrid(){
   const grid=document.getElementById('ddVideoGrid');
-  grid.innerHTML=ddVideos.length? ddVideos.map(v=>`
-    <div class="post ${ddPick.has(v.path)?'sel':''}" onclick='toggleDd(${JSON.stringify(v.path)})'>
-      <div class="pcover" style="display:grid;place-items:center;font-size:28px">🎬<span class="pcheck">✓</span></div>
-      <div class="pcap" title="${esc(v.name)}">${esc(v.name)}</div>
-      <div class="pstat">${esc(v.blogger||'')}${v.mix?' · '+esc(v.mix):''} · ${v.size}MB</div>
-    </div>`).join('') : emptyBox('📭','下载库没有视频','先去下载一些视频');
+  grid.style.display='block';
+  grid.innerHTML=vidFoldersHTML(ddVideos, {
+    onClick:'toggleDdFolder', isSel:v=>ddPick.has(v.path),
+    state:g=>{ const n=g.videos.filter(v=>ddPick.has(v.path)).length; return n===0?'none':(n===g.videos.length?'all':'some'); }});
 }
-function toggleDd(path){ if(ddPick.has(path)) ddPick.delete(path); else ddPick.add(path);
-  renderDdGrid(); const n=ddPick.size;
-  document.getElementById('ddPickCount').textContent=n; document.getElementById('ddRunBtn').disabled=!n; }
+function toggleDdFolder(key){
+  const vids=_folderVideos(ddVideos,key);
+  const allSel=vids.length && vids.every(v=>ddPick.has(v.path));
+  vids.forEach(v=>{ if(allSel) ddPick.delete(v.path); else ddPick.add(v.path); });
+  renderDdGrid();
+  const n=ddPick.size;
+  document.getElementById('ddPickCount').textContent=n;
+  document.getElementById('ddRunBtn').disabled=!n;
+}
 function collectDdOpts(){
   const on=id=>document.getElementById(id).checked;
   const num=id=>parseFloat(document.getElementById(id).value);
@@ -1157,7 +1245,7 @@ async function ddRetry(btn){ btn.disabled=true; try{ const d=await api('/api/ded
 async function ddClear(){ try{ await api('/api/dedup/clear','POST'); loadDedupTasks(); }catch(e){} }
 
 /* ---- 视频号发布 ---- */
-let chVideos=[], chPick=[], chTimer=null;
+let chVideos=[], chPick=[], chTimer=null, chOpen=new Set();
 function openChannels(){ chFn('accounts'); loadChVideos(); startChannelsPoll(); }
 function chFn(fn){
   document.querySelectorAll('#page-channels .jvtab').forEach(t=>t.classList.toggle('on',t.dataset.fn===fn));
@@ -1215,12 +1303,21 @@ async function loadChVideos(){
 function renderChVideoGrid(){
   const grid=document.getElementById('chVideoGrid');
   const picked=new Set(chPick.map(p=>p.path));
-  grid.innerHTML=chVideos.length? chVideos.map(v=>`
-    <div class="post ${picked.has(v.path)?'sel':''}" onclick='toggleChVid(${JSON.stringify(v)})'>
-      <div class="pcover" style="display:grid;place-items:center;font-size:30px">🎬<span class="pcheck">✓</span></div>
-      <div class="pcap" title="${esc(v.name)}">${esc(v.name)}</div>
-      <div class="pstat">${esc(v.blogger||'')}${v.mix?' · '+esc(v.mix):''} · ${v.size}MB</div>
-    </div>`).join('') : emptyBox('📭','下载库没有视频','先去下载一些视频，再回来发布');
+  grid.style.display='block';
+  grid.innerHTML=vidFoldersHTML(chVideos, {
+    onClick:'toggleChFolder', isSel:v=>picked.has(v.path),
+    state:g=>{ const n=g.videos.filter(v=>picked.has(v.path)).length; return n===0?'none':(n===g.videos.length?'all':'some'); }});
+}
+function toggleChFolder(key){
+  const vids=_folderVideos(chVideos,key);
+  const picked=new Set(chPick.map(p=>p.path));
+  const allSel=vids.length && vids.every(v=>picked.has(v.path));
+  vids.forEach(v=>{
+    const i=chPick.findIndex(p=>p.path===v.path);
+    if(allSel){ if(i>=0) chPick.splice(i,1); }
+    else if(i<0){ chPick.push({path:v.path, name:v.name, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)}); }
+  });
+  renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function') chPreview();
 }
 function toggleChVid(v){
   const i=chPick.findIndex(p=>p.path===v.path);
@@ -1463,6 +1560,15 @@ async function openPosts(sec){
   }catch(e){ grid.innerHTML=emptyBox('⚠','加载失败',e.message); }
 }
 
+// 合集状态小条：属于「下载过的合集」时显示，有新集给「补齐」按钮
+function mixChip(p){
+  const m=p&&p.mix; if(!m||!m.followed) return '';
+  const nu=m.new_count||0;
+  const info=`📺《${esc(m.mix_name||'合集')}》已下 ${m.local_have}/${m.cloud_total} 集`;
+  const btn=nu>0?`<button class="mixnew" onclick="event.stopPropagation();pullMix('${esc(m.mix_id)}')">🆕 补齐 ${nu} 集</button>`:'';
+  return `<div class="pmix ${nu>0?'has':''}">${info}${btn}</div>`;
+}
+
 function renderPosts(){
   const grid=document.getElementById('postsGrid');
   grid.innerHTML=curPosts.length? curPosts.map(p=>`
@@ -1476,6 +1582,7 @@ function renderPosts(){
       </div>
       <div class="pcap" title="${esc(p.desc)}">${esc(p.desc)}</div>
       <div class="pstat">👍 ${p.digg} · ${esc(p.create_time.slice(0,10))}</div>
+      ${mixChip(p)}
     </div>`).join('') : emptyBox('📭','没有拉到作品','可能触发风控，稍后再点博主试试');
   updateBar();
 }
@@ -1596,7 +1703,7 @@ function discHeadline(p,k){
 }
 function renderDisc(){
   const grid=document.getElementById('discGrid');
-  const sk=document.getElementById('discSort')?.value||'vel';
+  const sk=document.getElementById('discSort')?.value||'digg';
   const arr=[...discItems].sort((a,b)=>discSortVal(b,sk)-discSortVal(a,sk));
   const hot=(k)=>k===sk?'color:var(--acc2);font-weight:700':'';   // 高亮当前排序榜的那个指标
   grid.innerHTML=arr.length? arr.map(p=>`
@@ -1617,6 +1724,7 @@ function renderDisc(){
         <span style="${hot('dark')}" title="黑马比 点赞÷粉丝">🐴${p.dark==null?'—':p.dark}</span>
         <span style="${hot('qual')}" title="互动质量 (评论+转发+收藏)÷点赞">💬${p.qual||0}%</span>
       </div>
+      ${mixChip(p)}
     </div>`).join('') : emptyBox('🕳️',
       discSrc==='library'?'这个时间范围内，库里博主没有发布作品':'没有符合条件的爆款',
       discSrc==='library'?'把时间范围放宽（最近7天/30天）再试；或去「博主监控」加更活跃、经常出爆款的号':'试试：降低点赞门槛 / 放宽到48h / 换更火的种子视频');
