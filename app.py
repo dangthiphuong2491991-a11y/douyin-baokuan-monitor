@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 import platforms
 from platforms import get_adapter, PLATFORM_LIST
+import channels
 
 
 async def resolve_aweme_id(text: str, platform: str = "douyin"):
@@ -75,6 +76,13 @@ POSTS_CACHE = {}  # sec_uid -> {aweme_id: 完整 aweme dict}，供手动下载�
 # 点赞数据快照（起飞预警/日报用）：aweme_id -> {desc,nickname,platform,create_time,alerted,pts:[[ts,digg]]}
 SNAPS_FILE = DATA / "snaps.json"
 SNAPS = _load(SNAPS_FILE, {})
+
+# 视频号发布
+CH_STATE_FILE = DATA / "channels_state.json"   # Playwright storage_state（登录 cookie）
+CH_LOGIN = {"running": False, "status": ""}
+UPLOAD_TASKS = {}
+UPLOAD_QUEUE: asyncio.Queue = asyncio.Queue()
+_up_seq = 0
 
 
 def _migrate_config():
@@ -612,6 +620,7 @@ async def _startup():
     asyncio.create_task(monitor_loop())
     for _ in range(2):                       # 两个下载工人：并发温和，防限流
         asyncio.create_task(_dl_worker())
+    asyncio.create_task(_upload_worker())    # 视频号上传：单工人串行，防风控
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -653,6 +662,9 @@ def api_status():
         "mix_progress": list(MIX_PROGRESS.values()),
         "tasks": {k: sum(1 for t in DL_TASKS.values() if t["status"] == k)
                   for k in ("queued", "running", "done", "failed")},
+        "uploads": {k: sum(1 for t in UPLOAD_TASKS.values() if t["status"] == k)
+                    for k in ("queued", "running", "done", "failed")},
+        "ch_logged_in": ch_logged_in(),
         "takeoffs": state.get("takeoffs", [])[:20],
         "last_digest": state.get("last_digest"),
         "takeoff_vel": config.get("takeoff_vel", 3000),
@@ -1479,6 +1491,155 @@ def api_import_bloggers(body: ImportBody):
     if added or body.mode == "replace":
         _save(CONFIG_FILE, config)
     return {"ok": True, "added": added, "total": len(config["bloggers"]), "mode": body.mode}
+
+
+# ==================== 视频号发布（Playwright 驱动系统 Edge/Chrome） ====================
+def ch_logged_in() -> bool:
+    return CH_STATE_FILE.exists()
+
+
+async def _ch_login_bg():
+    CH_LOGIN["running"] = True
+    try:
+        await channels.login(CH_STATE_FILE, timeout=240,
+                             on_status=lambda m: CH_LOGIN.update(status=m))
+    except Exception as e:
+        CH_LOGIN["status"] = f"登录出错：{str(e)[:120]}"
+        log_err(f"视频号登录出错: {e}")
+    finally:
+        CH_LOGIN["running"] = False
+
+
+@app.post("/api/channels/login")
+async def api_channels_login():
+    if CH_LOGIN["running"]:
+        return {"ok": True, "already": True}
+    CH_LOGIN["status"] = "启动中…"
+    asyncio.create_task(_ch_login_bg())
+    return {"ok": True}
+
+
+@app.get("/api/channels/status")
+def api_channels_status():
+    counts = {k: 0 for k in ("queued", "running", "done", "failed")}
+    for t in UPLOAD_TASKS.values():
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    tasks = list(UPLOAD_TASKS.values())[-200:]
+    tasks.reverse()
+    return {"logged_in": ch_logged_in(), "login_running": CH_LOGIN["running"],
+            "login_status": CH_LOGIN["status"], "counts": counts, "tasks": tasks}
+
+
+@app.post("/api/channels/logout")
+def api_channels_logout():
+    try:
+        CH_STATE_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.get("/api/channels/videos")
+def api_channels_videos():
+    """列出整个下载目录里所有 mp4，供挑选上传（不管在根/平台子目录/合集子目录都能扫到）。"""
+    out = []
+    root = get_dl()
+    plat_names = {"抖音", "TikTok"}
+    if root.exists():
+        for f in root.rglob("*.mp4"):
+            if not f.is_file() or f.name.endswith(".part"):
+                continue
+            parts = list(f.relative_to(root).parts[:-1])   # 各级文件夹
+            if parts and parts[0] in plat_names:            # 去掉平台层
+                parts = parts[1:]
+            out.append({"path": str(f), "name": f.name,
+                        "blogger": parts[0] if len(parts) >= 1 else "",
+                        "mix": parts[1] if len(parts) >= 2 else "",
+                        "size": round(f.stat().st_size / 1024 / 1024, 1),
+                        "mtime": f.stat().st_mtime})
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return {"videos": out[:800]}
+
+
+class UploadItem(BaseModel):
+    video_path: str
+    title: str = ""
+    tags: list[str] = []
+    desc: str = ""
+    cover_path: str = ""
+    original: bool = False
+    schedule: str = ""     # "YYYY-MM-DD HH:MM" 或空=立即
+
+
+class UploadBody(BaseModel):
+    items: list[UploadItem] = []
+
+
+@app.post("/api/channels/upload")
+def api_channels_upload(body: UploadBody):
+    if not ch_logged_in():
+        return JSONResponse({"error": "请先登录视频号"}, status_code=400)
+    global _up_seq
+    n = 0
+    for it in body.items:
+        if not Path(it.video_path).exists():
+            continue
+        _up_seq += 1
+        tid = f"u{_up_seq}"
+        UPLOAD_TASKS[tid] = {"id": tid, "title": it.title or Path(it.video_path).stem,
+                             "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
+                             "cover_path": it.cover_path, "original": it.original,
+                             "schedule": it.schedule, "status": "queued", "stage": "", "err": "",
+                             "ts": datetime.now().strftime("%H:%M:%S")}
+        UPLOAD_QUEUE.put_nowait(tid)
+        n += 1
+    return {"ok": True, "queued": n}
+
+
+@app.post("/api/channels/tasks/retry_failed")
+def api_channels_retry():
+    n = 0
+    for t in UPLOAD_TASKS.values():
+        if t["status"] == "failed":
+            t.update(status="queued", err="", stage="")
+            UPLOAD_QUEUE.put_nowait(t["id"])
+            n += 1
+    return {"ok": True, "requeued": n}
+
+
+@app.post("/api/channels/tasks/clear")
+def api_channels_clear():
+    for tid in [k for k, t in UPLOAD_TASKS.items() if t["status"] in ("done", "failed")]:
+        UPLOAD_TASKS.pop(tid, None)
+    return {"ok": True}
+
+
+async def _upload_worker():
+    while True:
+        tid = await UPLOAD_QUEUE.get()
+        t = UPLOAD_TASKS.get(tid)
+        if not t or t["status"] != "queued":
+            continue
+        if not ch_logged_in():
+            t.update(status="failed", err="未登录视频号")
+            continue
+        t["status"] = "running"
+        sched = None
+        if t.get("schedule"):
+            try:
+                sched = datetime.strptime(t["schedule"], "%Y-%m-%d %H:%M")
+            except Exception:
+                sched = None
+        try:
+            ok, msg = await channels.upload(
+                CH_STATE_FILE, t["video_path"], title=t["title"], tags=t["tags"],
+                desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
+                schedule=sched, headless=False, err_dir=DATA,
+                on_status=lambda m: t.update(stage=m))
+            t.update(status="done" if ok else "failed", err="" if ok else msg, stage=msg)
+        except Exception as e:
+            t.update(status="failed", err=str(e)[:160])
+        await asyncio.sleep(3)   # 每条之间多停一会，降低风控/封号概率
 
 
 @app.get("/api/check_update")

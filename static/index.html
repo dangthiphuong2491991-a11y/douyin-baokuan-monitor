@@ -187,6 +187,8 @@
       <a data-page="discover"><span class="ic">🔥</span>发现爆款</a>
       <a data-page="lib"><span class="ic">📦</span>下载库</a>
       <a data-page="tasks"><span class="ic">⬇</span>任务中心<span class="badge" id="taskBadge" style="display:none">0</span></a>
+      <div class="grp">发布</div>
+      <a data-page="channels"><span class="ic">📤</span>视频号发布<span class="badge" id="upBadge" style="display:none">0</span></a>
       <div class="grp">配置</div>
       <a data-page="set"><span class="ic">⚙️</span>设置</a>
     </nav>
@@ -344,6 +346,71 @@
           <button class="btn ghost" onclick="clearTasks()">🧹 清除已完成/失败</button>
         </div>
         <div id="taskList" style="display:flex;flex-direction:column;gap:8px"></div>
+      </section>
+
+      <!-- 视频号发布 -->
+      <section class="page" id="page-channels">
+        <h2 class="hero">视频号<span class="g">发布</span></h2>
+        <div class="lead">把下载库里的视频批量发到微信视频号。走系统浏览器自动化，需先扫码登录。<b style="color:var(--warn)">请只发你有版权/已授权/做过二创的内容，纯搬运有封号风险。</b></div>
+
+        <!-- 登录 -->
+        <div class="card" id="chLoginCard" style="padding:16px 18px;margin-bottom:18px;border-color:var(--acc)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tag" style="background:var(--grad);color:#fff;border:0">第一步</span>
+            <span style="font-weight:800;font-size:16px">视频号登录</span>
+            <span id="chBadge" class="tag">未登录</span>
+          </div>
+          <div id="chLoginStatus" style="color:var(--sub);font-size:13px;margin-top:8px">点「扫码登录」会弹出一个浏览器窗口，用微信扫码登录视频号助手，登录一次可用一段时间。</div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="chLoginBtn" onclick="chLogin(this)">📱 扫码登录</button>
+            <button class="btn ghost" id="chLogoutBtn" onclick="chLogout()" style="display:none">退出登录</button>
+          </div>
+        </div>
+
+        <!-- 选视频 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:18px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+            <span style="font-weight:800;font-size:16px">第二步 · 选视频</span>
+            <button class="btn ghost" style="padding:6px 12px" onclick="loadChVideos()">🔄 刷新下载库</button>
+            <span class="sp" style="margin-left:auto;color:var(--sub);font-size:12.5px" id="chVidMeta"></span>
+          </div>
+          <div id="chVideoGrid" class="posts" style="max-height:340px;overflow:auto"></div>
+        </div>
+
+        <!-- 批量设置 + 待上传 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:18px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:12px">第三步 · 文案与发布设置</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <label style="font-size:13px;color:var(--sub)">话题标签（逗号分隔，套用所有）
+              <input id="chTags" placeholder="例如：影视解说,历史,爽文" style="width:100%;margin-top:5px"></label>
+            <label style="font-size:13px;color:var(--sub)">简介（套用所有，可空）
+              <input id="chDesc" placeholder="视频描述文案" style="width:100%;margin-top:5px"></label>
+          </div>
+          <div class="row" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)">
+              <span class="switch"><input type="checkbox" id="chOriginal"><span class="slider"></span></span>声明原创</label>
+            <label style="font-size:13px;color:var(--sub)">定时发布（留空=立即）
+              <input type="datetime-local" id="chSchedule" style="margin-left:6px"></label>
+            <span style="color:var(--dim);font-size:12px">标题在下面每条单独填（默认用文件名）</span>
+          </div>
+        </div>
+
+        <div class="ptoolbar">
+          <span style="font-weight:700">待上传 <span id="chPickCount">0</span> 条</span>
+          <button class="btn" id="chUploadBtn" disabled onclick="startUpload(this)" style="margin-left:auto">📤 开始上传</button>
+        </div>
+        <div id="chPickList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:22px"></div>
+
+        <!-- 上传队列 -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="font-weight:800;font-size:16px">上传队列</span>
+          <span class="tag load" id="upRunning">进行 0</span>
+          <span class="tag ok" id="upDone">完成 0</span>
+          <span class="tag fail" id="upFailed">失败 0</span>
+          <button class="btn ghost" id="upRetryBtn" onclick="chRetry(this)" style="margin-left:auto;display:none">🔁 重试失败</button>
+          <button class="btn ghost" onclick="chClear()">🧹 清除完成/失败</button>
+        </div>
+        <div id="upList" style="display:flex;flex-direction:column;gap:8px"></div>
       </section>
 
       <!-- 设置 -->
@@ -533,7 +600,7 @@ async function api(url, method='GET', body){
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
 
 /* nav */
-const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',set:'设置'};
+const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',channels:'视频号发布',set:'设置'};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on');
@@ -543,6 +610,7 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.getElementById('pageTitle').textContent=titles[p];
   if(p==='lib') loadLib();
   if(p==='tasks') startTaskPoll();
+  if(p==='channels') openChannels();
 });
 
 function render(st){
@@ -573,6 +641,13 @@ function render(st){
     if(act){ tb.style.display='grid'; tb.textContent=act; tb.style.background='var(--acc)'; }
     else if(fail){ tb.style.display='grid'; tb.textContent=fail; tb.style.background='var(--red)'; }
     else tb.style.display='none';
+  }
+  const ub=document.getElementById('upBadge');
+  if(ub){
+    const act=(st.uploads?.queued||0)+(st.uploads?.running||0), fail=st.uploads?.failed||0;
+    if(act){ ub.style.display='grid'; ub.textContent=act; ub.style.background='var(--acc)'; }
+    else if(fail){ ub.style.display='grid'; ub.textContent=fail; ub.style.background='var(--red)'; }
+    else ub.style.display='none';
   }
   // 雷达设置回填（正在编辑时不覆盖）
   const tv=document.getElementById('takeoffVel');
@@ -732,6 +807,128 @@ async function retryFailed(btn){
   btn.disabled=false;
 }
 async function clearTasks(){ try{ await api('/api/tasks/clear','POST'); loadTasks(); }catch(e){} }
+
+/* ---- 视频号发布 ---- */
+let chVideos=[], chPick=[], chTimer=null;
+function openChannels(){ loadChVideos(); startChannelsPoll(); }
+
+async function loadChVideos(){
+  const grid=document.getElementById('chVideoGrid');
+  grid.innerHTML='<div class="empty" style="padding:24px">加载中…</div>';
+  try{
+    const d=await api('/api/channels/videos');
+    chVideos=d.videos||[];
+    document.getElementById('chVidMeta').textContent='下载库共 '+chVideos.length+' 个视频';
+    renderChVideoGrid();
+  }catch(e){ grid.innerHTML=emptyBox('⚠','加载失败',e.message); }
+}
+function renderChVideoGrid(){
+  const grid=document.getElementById('chVideoGrid');
+  const picked=new Set(chPick.map(p=>p.path));
+  grid.innerHTML=chVideos.length? chVideos.map(v=>`
+    <div class="post ${picked.has(v.path)?'sel':''}" onclick='toggleChVid(${JSON.stringify(v)})'>
+      <div class="pcover" style="display:grid;place-items:center;font-size:30px">🎬<span class="pcheck">✓</span></div>
+      <div class="pcap" title="${esc(v.name)}">${esc(v.name)}</div>
+      <div class="pstat">${esc(v.blogger||'')}${v.mix?' · '+esc(v.mix):''} · ${v.size}MB</div>
+    </div>`).join('') : emptyBox('📭','下载库没有视频','先去下载一些视频，再回来发布');
+}
+function toggleChVid(v){
+  const i=chPick.findIndex(p=>p.path===v.path);
+  if(i>=0) chPick.splice(i,1);
+  else chPick.push({path:v.path, name:v.name, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)});
+  renderChVideoGrid(); renderPickList();
+}
+function renderPickList(){
+  document.getElementById('chPickCount').textContent=chPick.length;
+  document.getElementById('chUploadBtn').disabled=chPick.length===0;
+  document.getElementById('chPickList').innerHTML=chPick.map((p,i)=>`
+    <div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
+      <span style="flex-shrink:0">🎬</span>
+      <input value="${esc(p.title)}" oninput="chPick[${i}].title=this.value" placeholder="标题（必填）" style="flex:1">
+      <span style="color:var(--dim);font-size:12px;flex-shrink:0;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.name)}">${esc(p.name)}</span>
+      <button class="x" onclick="removePick(${i})">✕</button>
+    </div>`).join('');
+}
+function removePick(i){ chPick.splice(i,1); renderChVideoGrid(); renderPickList(); }
+
+async function startUpload(btn){
+  if(!chPick.length) return;
+  if(!curStatus){ }
+  const tagsStr=document.getElementById('chTags').value.trim();
+  const tags=tagsStr?tagsStr.split(/[,，\s]+/).filter(Boolean):[];
+  const desc=document.getElementById('chDesc').value.trim();
+  const original=document.getElementById('chOriginal').checked;
+  const schedRaw=document.getElementById('chSchedule').value;   // "YYYY-MM-DDTHH:MM"
+  const schedule=schedRaw?schedRaw.replace('T',' '):'';
+  const items=chPick.map(p=>({video_path:p.path, title:p.title||p.name, tags, desc, original, schedule}));
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='入队中…';
+  try{
+    const d=await api('/api/channels/upload','POST',{items});
+    toast('已加入上传队列 '+d.queued+' 条，浏览器会自动逐条发布');
+    chPick=[]; renderChVideoGrid(); renderPickList();
+    loadUploadTasks();
+  }catch(e){ uiAlert(e.message); }
+  btn.disabled=false; btn.innerHTML=old;
+}
+
+async function chLogin(btn){
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='请在弹出的浏览器里扫码…';
+  try{ await api('/api/channels/login','POST'); toast('已弹出浏览器，请用微信扫码'); }
+  catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; return; }
+  // 轮询等登录完成（最多 4 分钟）
+  let n=0; const iv=setInterval(async()=>{
+    n++; let s; try{ s=await api('/api/channels/status'); }catch(e){ return; }
+    document.getElementById('chLoginStatus').textContent=s.login_status||'等待扫码…';
+    if(s.logged_in){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; toast('视频号登录成功！'); renderChannels(s); }
+    else if(!s.login_running && n>2){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; renderChannels(s); }
+    if(n>80){ clearInterval(iv); btn.disabled=false; btn.innerHTML=old; }
+  },3000);
+}
+async function chLogout(){
+  if(!await uiConfirm('退出视频号登录？','退出登录')) return;
+  await api('/api/channels/logout','POST'); toast('已退出视频号登录'); refreshChannels();
+}
+
+const UP_ST={queued:['⏳','排队',''],running:['📤','上传中','load'],done:['✅','完成','ok'],failed:['❌','失败','fail']};
+function upRow(t){
+  const [ic,label,cls]=UP_ST[t.status]||['•',t.status,''];
+  return `<div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
+    <span style="flex-shrink:0">${ic}</span>
+    <div style="flex:1;min-width:0">
+      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.title)}</div>
+      <div style="color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.stage||'')}${t.err?` · <span style="color:var(--red)">${esc(t.err)}</span>`:''} · ${esc(t.ts)}</div>
+    </div>
+    <span class="tag ${cls}" style="flex-shrink:0">${label}</span>
+  </div>`;
+}
+function renderChannels(s){
+  const li=s.logged_in;
+  const b=document.getElementById('chBadge');
+  if(b){ b.textContent=li?'已登录':'未登录'; b.className='tag '+(li?'ok':''); }
+  const lo=document.getElementById('chLogoutBtn'); if(lo) lo.style.display=li?'inline-block':'none';
+  if(!document.getElementById('chLoginBtn').disabled && s.login_status)
+    document.getElementById('chLoginStatus').textContent=s.login_status;
+  // 队列
+  const set=(id,txt)=>{const el=document.getElementById(id); if(el) el.textContent=txt;};
+  set('upRunning','进行 '+((s.counts?.queued||0)+(s.counts?.running||0)));
+  set('upDone','完成 '+(s.counts?.done||0)); set('upFailed','失败 '+(s.counts?.failed||0));
+  const rb=document.getElementById('upRetryBtn'); if(rb) rb.style.display=(s.counts?.failed)?'inline-block':'none';
+  document.getElementById('upList').innerHTML=(s.tasks&&s.tasks.length)?s.tasks.map(upRow).join('')
+    :emptyBox('📤','还没有上传任务','选好视频、填好文案，点「开始上传」');
+}
+async function refreshChannels(){ try{ renderChannels(await api('/api/channels/status')); }catch(e){} }
+async function loadUploadTasks(){ refreshChannels(); }
+function startChannelsPoll(){
+  refreshChannels();
+  clearInterval(chTimer);
+  chTimer=setInterval(()=>{
+    const pg=document.getElementById('page-channels');
+    if(pg&&pg.classList.contains('on')) refreshChannels();
+    else{ clearInterval(chTimer); chTimer=null; }
+  },3000);
+}
+async function chRetry(btn){ btn.disabled=true; try{ const d=await api('/api/channels/tasks/retry_failed','POST'); toast('已重新排队 '+d.requeued+' 条'); refreshChannels(); }catch(e){} btn.disabled=false; }
+async function chClear(){ try{ await api('/api/channels/tasks/clear','POST'); refreshChannels(); }catch(e){} }
 
 /* ---- 雷达设置（起飞预警阈值 + 日报时间） ---- */
 async function saveRadar(){

@@ -4,10 +4,11 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('static', 'static')]
 binaries = []
-hiddenimports = ['app']
+hiddenimports = ['app', 'channels']
 
-# f2 / pywebview / uvicorn 等需要连数据文件一起收集
-for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3'):
+# f2 / pywebview / uvicorn / playwright 等需要连数据文件一起收集
+# 注意：playwright 走系统 Edge/Chrome（channel=msedge），只需打包它的 node 驱动，不含 Chromium。
+for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3', 'playwright'):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -16,7 +17,7 @@ for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3'):
     except Exception:
         pass
 hiddenimports += collect_submodules('uvicorn')
-hiddenimports += ['jsonpath_ng', 'm3u8', 'pyexecjs', 'execjs', 'gmssl']
+hiddenimports += ['jsonpath_ng', 'm3u8', 'pyexecjs', 'execjs', 'gmssl', 'greenlet', 'pyee']
 # 建桌面快捷方式用（pywin32）
 hiddenimports += ['pythoncom', 'pywintypes', 'win32com', 'win32com.client', 'win32api']
 
