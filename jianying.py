@@ -102,8 +102,40 @@ def encrypt(plain: str) -> bytes:
     return _rd_str(out_b)
 
 
+def _index_path() -> str:
+    return os.path.join(draft_root(), "root_meta_info.json")
+
+
+def _index() -> dict:
+    try:
+        return json.load(open(_index_path(), encoding="utf-8"))
+    except Exception:
+        return {"all_draft_store": []}
+
+
+def draft_dir(name: str) -> str:
+    """草稿真实文件夹：草稿文件可能在自定义位置(如 D:\\soft)，从索引读 draft_fold_path。"""
+    for x in _index().get("all_draft_store", []):
+        if x.get("draft_name") == name:
+            fp = (x.get("draft_fold_path") or "").replace("/", os.sep)
+            if fp and os.path.isdir(fp):
+                return fp
+    return os.path.join(draft_root(), name)     # 兜底：索引没有就按默认位置
+
+
+def drafts_base() -> str:
+    """新草稿写到哪个父目录（跟现有草稿放一起）。取索引里最常见的父目录。"""
+    from collections import Counter
+    c = Counter()
+    for x in _index().get("all_draft_store", []):
+        fp = x.get("draft_fold_path")
+        if fp:
+            c[os.path.dirname(fp.replace("/", os.sep))] += 1
+    return c.most_common(1)[0][0] if c else draft_root()
+
+
 def read_draft_json(name: str) -> dict:
-    p = os.path.join(draft_root(), name, "draft_content.json")
+    p = os.path.join(draft_dir(name), "draft_content.json")
     raw = open(p, "rb").read()
     if raw.lstrip()[:1] in (b"{", b"["):        # 老版本明文
         return json.loads(raw)
@@ -111,19 +143,14 @@ def read_draft_json(name: str) -> dict:
 
 
 def list_drafts() -> list:
-    """从 root_meta_info.json（明文）读草稿列表。"""
-    rp = os.path.join(draft_root(), "root_meta_info.json")
+    """从 root_meta_info.json（明文）读草稿列表。按真实 fold_path 判存在（草稿文件可能在 D:\\soft）。"""
     out = []
-    try:
-        rm = json.load(open(rp, encoding="utf-8"))
-        for x in rm.get("all_draft_store", []):
-            nm = x.get("draft_name")
-            fold = x.get("draft_fold_path") or ""
-            if nm and os.path.isdir(os.path.join(draft_root(), nm)):
-                out.append({"name": nm, "fold": fold,
-                            "modified": x.get("tm_draft_modified", 0)})
-    except Exception:
-        pass
+    for x in _index().get("all_draft_store", []):
+        nm = x.get("draft_name")
+        fold = (x.get("draft_fold_path") or "").replace("/", os.sep)
+        if nm and fold and os.path.isdir(fold):
+            out.append({"name": nm, "fold": fold, "modified": x.get("tm_draft_modified", 0)})
+    out.sort(key=lambda d: d["modified"], reverse=True)
     return out
 
 
@@ -151,11 +178,14 @@ def compose_one(template_name, clip_paths, out_name, speed_range=(0.9, 1.0)):
     做法：克隆模板自己的片段/素材原型（schema 天然匹配本版剪映），只改 路径/时长/速度。"""
     tj = read_draft_json(template_name)
     mats = tj["materials"]
-    main = next((t for t in tj["tracks"] if t.get("type") == "video"), None)
-    if not main or not main.get("segments"):
-        raise RuntimeError("模板主轨道没有视频片段可参照（换个有视频的模板）")
+    vtracks = [t for t in tj["tracks"] if t.get("type") == "video"]
+    proto_track = next((t for t in vtracks if t.get("segments")), None)   # 参照：有片段的视频轨道
+    if not proto_track:
+        raise RuntimeError("模板没有可参照的视频片段（换个有视频的模板）")
+    # 主轨道=空的视频轨道(素材塞这)，没有就用参照轨道本身
+    main = next((t for t in vtracks if not t.get("segments")), None) or proto_track
 
-    proto_seg = copy.deepcopy(main["segments"][0])
+    proto_seg = copy.deepcopy(proto_track["segments"][0])
     proto_mat = next((m for m in mats.get("videos", []) if m.get("id") == proto_seg.get("material_id")), None)
     if not proto_mat:
         raise RuntimeError("模板片段找不到对应视频素材")
@@ -260,9 +290,8 @@ def compose_batch(template_name, clips_folder, out_prefix, count=1, mode="count"
 
 
 def _write_draft(template_name, out_name, content):
-    root = draft_root()
-    src = os.path.join(root, template_name)
-    dst = os.path.join(root, out_name)
+    src = draft_dir(template_name)                         # 模板真实位置（可能在 D:\soft）
+    dst = os.path.join(drafts_base(), out_name)            # 新草稿写到现有草稿同目录
     if os.path.exists(dst):
         shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(src, dst)                              # 整份复制模板(含封面/资源)
