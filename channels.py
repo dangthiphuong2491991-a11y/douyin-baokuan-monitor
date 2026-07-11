@@ -60,7 +60,7 @@ async def login(state_file: Path, timeout: int = 240, on_status=None) -> bool:
                     break
             except Exception:
                 pass
-        nickname = ""
+        info = {"nickname": "", "wxid": "", "avatar": False}
         if ok:
             await page.wait_for_timeout(1800)
             try:
@@ -68,19 +68,203 @@ async def login(state_file: Path, timeout: int = 240, on_status=None) -> bool:
             except Exception as e:
                 st(f"保存登录态失败：{e}")
                 ok = False
-            for sel in ('.finder-nickname', '.account-info-nickname', 'span.finder-nickname',
-                        'div.finder-info-nickname', '.header-account-name', '.name-wrap .nickname'):
+            if ok:
                 try:
-                    loc = page.locator(sel)
-                    if await loc.count():
-                        nickname = (await loc.first.inner_text()).strip()
-                        if nickname:
-                            break
-                except Exception:
-                    pass
+                    info = await _grab_profile(page, ctx, state_file, st)
+                except Exception as e:
+                    st(f"读账号资料失败（不影响登录）：{str(e)[:60]}")
         await browser.close()
         st("登录成功" if ok else "超时未检测到登录")
-        return ok, nickname
+        return ok, info
+
+
+async def _grab_profile(page, ctx, state_file: Path, st=None) -> dict:
+    """登录后到首页抓：昵称 / 视频号ID(sph...) / 头像；头像下载到 {aid}.jpg 本地存。"""
+    import re
+    info = {"nickname": "", "wxid": "", "avatar": False}
+    try:
+        await page.goto("https://channels.weixin.qq.com/platform", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2500)
+    except Exception:
+        pass
+    # 昵称
+    for sel in ('.finder-nickname', '.account-info-nickname', 'span.finder-nickname',
+                'div.finder-info-nickname', '.header-account-name', '.name-wrap .nickname',
+                'h1', '.profile-name', '.account-name'):
+        try:
+            loc = page.locator(sel)
+            if await loc.count():
+                t = (await loc.first.inner_text()).strip()
+                if t and len(t) < 40:
+                    info["nickname"] = t
+                    break
+        except Exception:
+            pass
+    # 视频号ID：整页文本里找 sph 开头的串
+    try:
+        body = await page.locator("body").inner_text()
+        m = re.search(r"sph[0-9A-Za-z_\-]{8,}", body or "")
+        if m:
+            info["wxid"] = m.group(0)
+    except Exception:
+        pass
+    # 头像：找 qlogo 头像图，用登录态下载到本地 {aid}.jpg
+    avatar_url = ""
+    try:
+        srcs = await page.eval_on_selector_all(
+            "img", "els => els.map(e => e.src).filter(Boolean)")
+        for s in srcs or []:
+            if "qlogo" in s or "wx.qlogo" in s or "/head" in s:
+                avatar_url = s
+                break
+    except Exception:
+        pass
+    if avatar_url:
+        try:
+            resp = await ctx.request.get(avatar_url, timeout=15000)
+            if resp.ok:
+                data = await resp.body()
+                Path(state_file).with_suffix(".jpg").write_bytes(data)
+                info["avatar"] = True
+        except Exception:
+            pass
+    return info
+
+
+def _harvest_names(obj, acc, depth=0):
+    """从任意 JSON 里挖出 名字/标题 类字段（视频号接口返回结构各异，通用兜底）。"""
+    if depth > 6 or acc.get("_n", 0) > 300:
+        return
+    if isinstance(obj, dict):
+        nm = obj.get("name") or obj.get("title") or obj.get("nickname") \
+            or obj.get("description") or obj.get("album_name") or obj.get("drama_name")
+        if isinstance(nm, str) and 0 < len(nm) < 60:
+            _id = obj.get("id") or obj.get("album_id") or obj.get("export_id") \
+                or obj.get("drama_id") or obj.get("collection_id") or ""
+            acc.setdefault("items", []).append({"name": nm.strip(), "id": str(_id)})
+            acc["_n"] = acc.get("_n", 0) + 1
+        for v in obj.values():
+            _harvest_names(v, acc, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _harvest_names(v, acc, depth + 1)
+
+
+async def fetch_lists(state_file: Path, on_status=None) -> dict:
+    """用账号登录态打开发表页，抓视频号自己发的 mmfinderassistant-bin 接口返回，
+    解析出这个号的：合集/专辑、视频号剧集。附带 debug（抓到哪些接口）方便对不上时调。"""
+    from playwright.async_api import async_playwright
+    import json as _json
+    out = {"collections": [], "dramas": [], "activities": [], "debug": []}
+    if not Path(state_file).exists():
+        out["debug"].append("登录态文件不存在")
+        return out
+
+    def st(m):
+        if on_status:
+            on_status(m)
+
+    st("打开发表页、抓视频号接口…")
+    hits = []   # [(url, json)]
+
+    async def _on_resp(resp):
+        u = resp.url or ""
+        if "mmfinderassistant-bin" not in u:
+            return
+        try:
+            j = await resp.json()
+            hits.append((u, j))
+        except Exception:
+            pass
+
+    async with async_playwright() as p:
+        browser = await _launch(p, headless=True)
+        ctx = await browser.new_context(storage_state=str(state_file))
+        page = await ctx.new_page()
+        page.on("response", lambda r: asyncio.create_task(_on_resp(r)))
+        try:
+            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=40000)
+            await page.wait_for_timeout(6500)   # 合集接口(/collection/get_collection_list)随页面自动发，先等它
+        except Exception as e:
+            await browser.close()
+            out["debug"].append(f"打开发表页失败: {str(e)[:80]}")
+            return out
+        # 主动点开各下拉触发它们的接口：先按标签点，再兜底点所有下拉控件
+        async def _click(loc):
+            try:
+                if await loc.count():
+                    await loc.first.click(timeout=2000)
+                    await page.wait_for_timeout(1300)
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(300)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        for label in ("添加到合集", "选择视频号剧集", "扩展链接", "活动", "请选择"):
+            # 点标签同一行的下拉控件（label 的后一个可点区域）
+            await _click(page.locator(
+                f"xpath=//*[contains(text(),'{label}')]/following::*[contains(@class,'select') or "
+                f"contains(@class,'dropdown') or contains(@class,'placeholder') or "
+                f"self::input][1]"))
+            await _click(page.locator(f"text={label}"))
+        # 兜底：把页面上所有下拉控件都点一遍
+        for sel in ('.weui-desktop-form__control', '[class*="select"]', '[class*="dropdown"]',
+                    '.weui-desktop-select'):
+            loc = page.locator(sel)
+            try:
+                n = min(await loc.count(), 12)
+            except Exception:
+                n = 0
+            for i in range(n):
+                try:
+                    await loc.nth(i).click(timeout=1200)
+                    await page.wait_for_timeout(700)
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+        await page.wait_for_timeout(1500)
+        await browser.close()
+
+    # 按接口 url 关键词分桶解析
+    all_eps = []
+    saw_collection_ep = False
+    for u, j in hits:
+        ep = u.split("mmfinderassistant-bin", 1)[-1].split("?")[0]
+        low = u.lower()
+        # 合集：视频号真实接口 /collection/get_collection_list → data.collectionList
+        if "get_collection_list" in low or ep.endswith("/collection/get_collection_list"):
+            saw_collection_ep = True
+            lst = (((j or {}).get("data") or {}).get("collectionList")) or []
+            for it in lst:
+                nm = it.get("name") or it.get("collectionName") or it.get("desc") or ""
+                if nm:
+                    out["collections"].append({"name": nm.strip(),
+                                               "id": str(it.get("collectionId") or it.get("id") or "")})
+            all_eps.append(f"{ep}(合集{len(lst)})")
+            continue
+        acc = {}
+        _harvest_names(j, acc)
+        names = acc.get("items", [])
+        all_eps.append(f"{ep}({len(names)})")
+        if not names:
+            continue
+        bucket = None
+        if "drama" in low or "episode" in low:
+            bucket = "dramas"
+        elif "event" in low or "activit" in low:
+            bucket = "activities"
+        if bucket:
+            seen = {x["name"] for x in out[bucket]}
+            for it in names:
+                if it["name"] not in seen:
+                    out[bucket].append(it)
+                    seen.add(it["name"])
+    out["saw_collection_api"] = saw_collection_ep
+    out["debug"] = all_eps[:30]
+    st("读取完成")
+    return out
 
 
 async def check_login(state_file: Path) -> bool:
@@ -115,7 +299,9 @@ async def _find_file_input(page):
 
 
 async def upload(state_file: Path, video_path: str, title: str = "", tags=None, desc: str = "",
-                 cover_path: str = "", original: bool = False, schedule=None,
+                 cover_path: str = "", original: bool = False, schedule=None, link: str = "",
+                 statement: str = "", location: str = "", collection: str = "",
+                 drama: str = "", activity: str = "",
                  headless: bool = False, on_status=None, err_dir: Path = None):
     """上传一条视频到视频号。schedule=datetime|None。返回 (ok:bool, msg:str)。"""
     from playwright.async_api import async_playwright
@@ -150,8 +336,23 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             await page.wait_for_timeout(2000)
 
             st("填标题/话题/简介")
-            editor = page.locator("div.input-editor").first
-            await editor.wait_for(timeout=30000)
+            # 内容编辑器：小V猫源码确认现版为 .text-editor-content，旧版 div.input-editor 兜底
+            editor = None
+            for _ in range(30):
+                for sel in (".text-editor-content", "div.input-editor", ".input-editor"):
+                    loc = page.locator(sel).first
+                    try:
+                        if await loc.count():
+                            editor = loc
+                            break
+                    except Exception:
+                        pass
+                if editor:
+                    break
+                await asyncio.sleep(1)
+            if editor is None:
+                editor = page.locator("div.input-editor").first
+            await editor.wait_for(timeout=15000)
             await editor.click()
             if title:
                 await page.keyboard.type(title[:30])
@@ -165,6 +366,15 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             if original:
                 st("勾选原创声明")
                 await _try_original(page)
+            if statement:
+                st("视频声明")
+                await _try_statement(page, statement)
+            if location:
+                st("设置地理位置")
+                await _try_location(page, location)
+            if collection:
+                st("添加到合集")
+                await _try_collection(page, collection)
             if cover_path:
                 st("设置封面")
                 await _try_cover(page, cover_path)
@@ -207,25 +417,109 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             return False, str(e)[:160]
 
 
+async def _dispatch_click(page, selector: str) -> bool:
+    """派发完整鼠标事件序列点一个元素（视频号 React 控件普通 click 点不动，仿小V猫源码）。"""
+    try:
+        return await page.evaluate(
+            """(sel)=>{const el=document.querySelector(sel); if(!el) return false;
+               ['mouseenter','mousedown','mouseup','click'].forEach(t=>
+                 el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window})));
+               return true;}""", selector)
+    except Exception:
+        return False
+
+
 async def _try_original(page):
     try:
         lbl = page.get_by_label("视频为原创")
         if await lbl.count():
             await lbl.first.check()
+            return
     except Exception:
         pass
+    # 派发鼠标事件序列点复选框（React 控件）
     for sel in ('div.declare-original-checkbox input.ant-checkbox-input',
-                'label:has-text("我已阅读并同意 《视频号原创声明使用条款》")'):
+                '.original-declaration-checkbox', 'label:has-text("视频为原创")'):
+        if await _dispatch_click(page, sel):
+            break
+    await page.wait_for_timeout(600)
+    # 弹层里同意条款 + 声明原创
+    for sel in ('.weui-desktop-dialog input.ant-checkbox-input',
+                '.declare-original-checkbox input'):
+        await _dispatch_click(page, sel)
+    for txt in ("声明原创", "确定", "确认"):
         try:
-            loc = page.locator(sel)
-            if await loc.count():
-                await loc.first.click()
+            b = page.locator(f'.weui-desktop-dialog button:has-text("{txt}")')
+            if await b.count():
+                await b.first.click()
+                break
         except Exception:
             pass
+
+
+async def _try_location(page, location: str):
+    """地理位置：往 #location input 里填，选第一个候选（仿小V猫 #location input）。"""
+    if not location:
+        return
     try:
-        btn = page.locator("button[name='声明原创']")
-        if await btn.count():
-            await btn.first.click()
+        inp = page.locator('#location input, input[placeholder*="位置"]').first
+        if not await inp.count():
+            # 先点开位置控件
+            await _dispatch_click(page, '.position-display, [class*="location"]')
+            await page.wait_for_timeout(600)
+            inp = page.locator('#location input, input[placeholder*="位置"]').first
+        if await inp.count():
+            await inp.click()
+            await inp.fill(location)
+            await page.wait_for_timeout(1500)   # 等 POI 搜索
+            # 选第一个候选（派发鼠标事件）
+            await _dispatch_click(page, '.location-list .location-item, .poi-list li, .getpoint-info')
+    except Exception:
+        pass
+
+
+async def _try_at(page, at: str):
+    """@视频号：搜索后选第一个（小V猫源码：.choose-finder-area .finder-list .finder-item + 派发鼠标事件）。"""
+    if not at:
+        return
+    try:
+        inp = page.locator('input[placeholder*="关键词"], .choose-finder-area input').first
+        if await inp.count():
+            await inp.fill(at.lstrip("@"))
+            await page.wait_for_timeout(1500)
+            await page.evaluate(
+                """()=>{const list=document.querySelector('.choose-finder-area .finder-list');
+                   if(!list) return false; const it=list.querySelector('.finder-item'); if(!it) return false;
+                   ['mouseenter','mousedown','mouseup','click'].forEach(t=>
+                     it.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))); return true;}""")
+    except Exception:
+        pass
+
+
+async def _try_statement(page, statement: str):
+    """视频声明：展开下拉选对应项。"""
+    if not statement:
+        return
+    try:
+        await _dispatch_click(page, '.declare-select, [class*="statement"] .weui-desktop-select')
+        await page.wait_for_timeout(600)
+        opt = page.locator(f'li:has-text("{statement}"), .option-item:has-text("{statement}")')
+        if await opt.count():
+            await opt.first.click()
+    except Exception:
+        pass
+
+
+async def _try_collection(page, collection: str):
+    """添加到合集：展开选对应合集。"""
+    if not collection:
+        return
+    try:
+        await _dispatch_click(page, '[class*="collection"] .weui-desktop-select, .collection-select')
+        await page.wait_for_timeout(600)
+        opt = page.locator(f'li:has-text("{collection}"), .option-item:has-text("{collection}")')
+        if await opt.count():
+            await opt.first.click()
     except Exception:
         pass
 

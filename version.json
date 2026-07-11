@@ -1,6 +1,6 @@
 {
-  "version": "1.0.12",
-  "notes": "① 合集「已下载」标志：查找视频时，属于下过的合集会一眼标出已下载；出了新集会显示「🆕补齐 N 集」，一键只补缺的集；② 下载不再存封面 jpg，文件夹更干净、只留视频正片；③ 下载库/视频去重/视频号发布全部改成 Windows 风格文件夹：下载库点文件夹进出浏览，去重和发布直接点整个文件夹选中；④ 发现爆款默认改成「总点赞榜」。",
+  "version": "1.0.13",
+  "notes": "① 全新浅色主题：仿造梦工坊白底紫调，界面更清爽；② 视频号一键发布整体复刻小V猫：顶部批量操作条(通用/视频号平台tab)、发布时间/分发模式浮层、每条视频卡(短标题/封面/扩展链接/简介/话题)、账号选择弹窗、全屏铺满布局；③ 新增均分分发模式(每号一天N条/单号优先·顺序循环/多日循环)；④ 截帧封面：ffmpeg抽首帧/尾帧/随机/指定帧+本地上传+读同名，支持批量；⑤ 视频号发布设置面板：视频声明/@视频号/地理位置/添加到合集(真接视频号 get_collection_list 接口拉取)；⑥ 账号卡显示头像+视频号ID；⑦ 做剪映模版：读草稿全部参数(透明度/蒙版/特效强度/调色/BGM)做成随机区间批量生成；⑧ 剪映草稿定时删除(默认生成1小时后自动清)；⑨ 发布选择器按小V猫源码校准。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
-  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.12/BaokuanMonitor.exe"
+  "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.13/BaokuanMonitor.exe"
 }

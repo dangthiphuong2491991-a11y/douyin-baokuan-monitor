@@ -4,6 +4,7 @@ import asyncio
 import json
 import base64
 import os
+import random
 import re
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import uvicorn
@@ -44,7 +46,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.12"
+VERSION = "1.0.13"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -112,10 +114,19 @@ def _migrate_config():
         if "platform" not in b:
             b["platform"] = "douyin"
             changed = True
-    for k, v in (("mix_follows", []), ("takeoff_vel", 3000), ("digest_hour", 9), ("ch_accounts", [])):
+    for k, v in (("mix_follows", []), ("takeoff_vel", 3000), ("digest_hour", 9), ("ch_accounts", []),
+                 ("jy_gen", []), ("jy_output_dir", ""),
+                 ("jy_autodel", {"enable": True, "hours": 1})):
         if k not in config:
             config[k] = v
             changed = True
+    # 老 jy_made(纯名字列表) → jy_gen(带时间戳)
+    if config.get("jy_made"):
+        have = {g["name"] for g in config["jy_gen"]}
+        for nm in config.pop("jy_made"):
+            if nm not in have:
+                config["jy_gen"].append({"name": nm, "ts": time.time(), "src": "tpl"})
+        changed = True
     # 老单账号 cookie → 迁移成第一个多账号
     if CH_STATE_FILE.exists() and not config.get("ch_accounts"):
         aid = "a1"
@@ -608,6 +619,10 @@ async def monitor_loop():
             _maybe_daily_digest()            # 每日日报（到点弹一次）
         except Exception as e:
             log_err(f"日报生成出错: {e}")
+        try:
+            _purge_expired_drafts()          # 定时删除过期的生成草稿
+        except Exception as e:
+            log_err(f"定时删草稿出错: {e}")
         state["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _save(STATE_FILE, state)
         try:
@@ -1416,6 +1431,24 @@ def api_set_dir(body: SetDirBody):
     return {"ok": True, "download_dir": config["download_dir"]}
 
 
+@app.post("/api/pick_folder")
+def api_pick_folder():
+    """通用：弹原生文件夹选择框，只返回选中的路径，不改任何配置。给素材库/输出位置等用。"""
+    try:
+        import webview
+        win = webview.active_window() or (webview.windows[0] if webview.windows else None)
+        if not win:
+            raise RuntimeError("no window")
+        res = win.create_file_dialog(webview.FOLDER_DIALOG)
+        if not res:
+            return {"ok": False, "cancelled": True}
+        path = res[0] if isinstance(res, (list, tuple)) else res
+        return {"ok": True, "path": str(Path(path))}
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"当前环境无法弹出文件夹选择框，请手动粘贴路径。({e})"}, status_code=400)
+
+
 @app.post("/api/choose_dir")
 def api_choose_dir():
     """弹出系统原生文件夹选择框（仅桌面模式可用）"""
@@ -1591,18 +1624,26 @@ async def _ch_login_bg(aid: str, is_new: bool, note: str, group: str):
     CH_LOGIN["running"] = True
     CH_LOGIN["status"] = "启动中…"
     try:
-        ok, nickname = await channels.login(_ch_state(aid), timeout=240,
-                                            on_status=lambda m: CH_LOGIN.update(status=m))
+        ok, info = await channels.login(_ch_state(aid), timeout=240,
+                                        on_status=lambda m: CH_LOGIN.update(status=m))
+        info = info if isinstance(info, dict) else {"nickname": info or ""}
+        nickname, wxid = info.get("nickname", ""), info.get("wxid", "")
         if ok and is_new:
             n = len(_ch_accounts()) + 1
             _ch_accounts().append({"id": aid, "name": nickname or f"视频号{n}", "note": note,
-                                   "group": group or "默认分组",
+                                   "group": group or "默认分组", "wxid": wxid,
+                                   "avatar": info.get("avatar", False),
                                    "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
             _save(CONFIG_FILE, config)
-        elif ok and nickname:
+        elif ok:
             acc = _ch_account(aid)
-            if acc and not acc.get("name_locked"):
-                acc["name"] = nickname
+            if acc:
+                if nickname and not acc.get("name_locked"):
+                    acc["name"] = nickname
+                if wxid:
+                    acc["wxid"] = wxid
+                if info.get("avatar"):
+                    acc["avatar"] = True
                 _save(CONFIG_FILE, config)
     except Exception as e:
         CH_LOGIN["status"] = f"登录出错：{str(e)[:120]}"
@@ -1635,12 +1676,54 @@ async def api_ch_relogin(aid: str):
     return {"ok": True}
 
 
+CH_LISTS = {"running": False, "data": {}, "for": ""}
+
+
+async def _ch_fetch_lists_bg(aid: str):
+    CH_LISTS.update({"running": True, "for": aid, "data": {}})
+    try:
+        CH_LISTS["data"] = await channels.fetch_lists(_ch_state(aid))
+    except Exception as e:
+        log_err(f"拉取视频号列表失败: {e}")
+        CH_LISTS["data"] = {"error": str(e)[:120]}
+    finally:
+        CH_LISTS["running"] = False
+
+
+@app.post("/api/channels/account/{aid}/fetch_lists")
+async def api_ch_fetch_lists(aid: str):
+    """用该账号登录态拉它的 合集/剧集/活动 列表。"""
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    if not ch_online(aid):
+        return JSONResponse({"error": "该账号离线，请先重新扫码登录"}, status_code=400)
+    if CH_LISTS["running"]:
+        return {"ok": True, "already": True}
+    asyncio.create_task(_ch_fetch_lists_bg(aid))
+    return {"ok": True}
+
+
+@app.get("/api/channels/lists_status")
+def api_ch_lists_status():
+    return CH_LISTS
+
+
+@app.get("/api/channels/account/{aid}/avatar")
+def api_ch_avatar(aid: str):
+    """账号头像（登录时抓存的 {aid}.jpg）。"""
+    p = _ch_state(aid).with_suffix(".jpg")
+    if p.exists():
+        return FileResponse(str(p))
+    return JSONResponse({"error": "无头像"}, status_code=404)
+
+
 @app.delete("/api/channels/account/{aid}")
 def api_ch_del(aid: str):
     config["ch_accounts"] = [a for a in _ch_accounts() if a["id"] != aid]
     _save(CONFIG_FILE, config)
     try:
         _ch_state(aid).unlink(missing_ok=True)
+        _ch_state(aid).with_suffix(".jpg").unlink(missing_ok=True)
     except Exception:
         pass
     return {"ok": True}
@@ -1687,45 +1770,193 @@ def api_channels_status():
 
 @app.get("/api/channels/videos")
 def api_channels_videos():
-    """列出整个下载目录里所有 mp4，供挑选上传（不管在根/平台子目录/合集子目录都能扫到）。"""
+    """列出可挑选上传的 mp4：下载目录 + 剪映成片输出文件夹（jy_output_dir）。"""
     out = []
-    root = get_dl()
+    seen = set()
     plat_names = {"抖音", "TikTok"}
-    if root.exists():
+
+    def _scan(root: Path, top_label: str):
+        if not root.exists():
+            return
         for f in root.rglob("*.mp4"):
-            if not f.is_file() or f.name.endswith(".part"):
+            if not f.is_file() or f.name.endswith(".part") or str(f) in seen:
                 continue
-            parts = list(f.relative_to(root).parts[:-1])   # 各级文件夹
-            if parts and parts[0] in plat_names:            # 去掉平台层
+            seen.add(str(f))
+            parts = list(f.relative_to(root).parts[:-1])
+            if parts and parts[0] in plat_names:
                 parts = parts[1:]
+            blogger = parts[0] if len(parts) >= 1 else top_label
             out.append({"path": str(f), "name": f.name,
-                        "blogger": parts[0] if len(parts) >= 1 else "",
+                        "blogger": blogger,
                         "mix": parts[1] if len(parts) >= 2 else "",
                         "size": round(f.stat().st_size / 1024 / 1024, 1),
                         "mtime": f.stat().st_mtime})
+
+    _scan(get_dl(), "")
+    od = config.get("jy_output_dir")
+    if od:
+        _scan(Path(od), "🎬 剪映成片")
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return {"videos": out[:800]}
 
 
 class UploadItem(BaseModel):
     video_path: str
-    title: str = ""
-    tags: list[str] = []
-    desc: str = ""
-    cover_path: str = ""
+    title: str = ""        # 视频号短标题
+    tags: list[str] = []   # 话题
+    desc: str = ""         # 简介
+    cover_path: str = ""   # 封面图
+    link: str = ""         # 扩展链接
     original: bool = False
     schedule: str = ""     # "YYYY-MM-DD HH:MM" 或空=立即
+
+
+# ---------------- 封面：ffmpeg 抽帧 / 本地选图（每条视频一张封面） ----------------
+COVERS_DIR = DATA / "covers"
+
+
+def _capture_cover(video_path: str, mode: str = "first", sec: float = 0.0) -> str:
+    """从视频抽一帧当封面。mode: first/last/random/at(指定秒)。返回封面 jpg 绝对路径。"""
+    COVERS_DIR.mkdir(exist_ok=True)
+    dur = 0.0
+    try:
+        dur = dedup.probe_duration(video_path) or 0.0
+    except Exception:
+        pass
+    if mode == "first":
+        t = 0.1
+    elif mode == "last":
+        t = max(0.0, dur - 0.3)
+    elif mode == "random":
+        t = random.uniform(0.0, max(0.2, dur - 0.3)) if dur else 0.1
+    else:                       # at 指定秒
+        t = max(0.0, float(sec or 0))
+    stem = sanitize(Path(video_path).stem, 20)
+    out = COVERS_DIR / f"{stem}_{int(t * 1000)}_{random.randint(1000, 9999)}.jpg"
+    try:
+        subprocess.run([dedup.FF, "-y", "-ss", str(t), "-i", str(video_path),
+                        "-frames:v", "1", "-q:v", "3", str(out)],
+                       capture_output=True, timeout=40)
+    except Exception as e:
+        log_err(f"抽帧封面失败: {e}")
+    return str(out) if out.exists() else ""
+
+
+class CaptureBody(BaseModel):
+    video_path: str
+    mode: str = "first"        # first/last/random/at
+    sec: float = 0.0
+
+
+@app.post("/api/channels/capture_frame")
+def api_ch_capture(body: CaptureBody):
+    if not Path(body.video_path).exists():
+        return JSONResponse({"error": "视频不存在"}, status_code=400)
+    p = _capture_cover(body.video_path, body.mode, body.sec)
+    if not p:
+        return JSONResponse({"error": "抽帧失败（视频可能损坏）"}, status_code=400)
+    return {"ok": True, "cover_path": p, "url": f"/api/localimg?path={quote(p)}"}
+
+
+@app.post("/api/channels/samename_cover")
+def api_ch_samename(body: CaptureBody):
+    """读取同名封面：找和视频同名的图片文件（同目录）。"""
+    v = Path(body.video_path)
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        cand = v.with_suffix(ext)
+        if cand.exists():
+            return {"ok": True, "cover": str(cand), "url": f"/api/localimg?path={quote(str(cand))}"}
+    return {"ok": False, "cover": ""}
+
+
+@app.get("/api/localimg")
+def api_localimg(path: str):
+    """本地图片直读（封面预览用）。只放行图片扩展名。"""
+    p = Path(path)
+    if p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif") or not p.exists():
+        return JSONResponse({"error": "不是图片或不存在"}, status_code=404)
+    return FileResponse(str(p))
+
+
+_VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".m4v")
+
+
+@app.post("/api/channels/pick_videos")
+def api_ch_pick_videos():
+    """选择文件添加：弹原生多选视频框，返回路径列表。"""
+    try:
+        import webview
+        win = webview.active_window() or (webview.windows[0] if webview.windows else None)
+        if not win:
+            raise RuntimeError("no window")
+        res = win.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=True,
+                                     file_types=("视频 (*.mp4;*.mov;*.mkv;*.avi;*.webm)", "所有文件 (*.*)"))
+        if not res:
+            return {"ok": False, "cancelled": True}
+        paths = list(res) if isinstance(res, (list, tuple)) else [res]
+        return {"ok": True, "paths": [str(p) for p in paths]}
+    except Exception as e:
+        return JSONResponse({"error": f"无法弹出选择框：{e}"}, status_code=400)
+
+
+@app.post("/api/channels/pick_video_dir")
+def api_ch_pick_video_dir():
+    """选择目录添加：弹文件夹框，递归扫出里面所有视频。"""
+    try:
+        import webview
+        win = webview.active_window() or (webview.windows[0] if webview.windows else None)
+        if not win:
+            raise RuntimeError("no window")
+        res = win.create_file_dialog(webview.FOLDER_DIALOG)
+        if not res:
+            return {"ok": False, "cancelled": True}
+        folder = res[0] if isinstance(res, (list, tuple)) else res
+        vids = [str(f) for f in Path(folder).rglob("*")
+                if f.is_file() and f.suffix.lower() in _VIDEO_EXTS and not f.name.endswith(".part")]
+        return {"ok": True, "paths": sorted(vids)}
+    except Exception as e:
+        return JSONResponse({"error": f"无法弹出选择框：{e}"}, status_code=400)
+
+
+@app.post("/api/channels/pick_cover")
+def api_ch_pick_cover():
+    """弹原生图片选择框，返回选中的图片路径。"""
+    try:
+        import webview
+        win = webview.active_window() or (webview.windows[0] if webview.windows else None)
+        if not win:
+            raise RuntimeError("no window")
+        res = win.create_file_dialog(
+            webview.OPEN_DIALOG, file_types=("图片 (*.jpg;*.jpeg;*.png;*.webp)", "所有文件 (*.*)"))
+        if not res:
+            return {"ok": False, "cancelled": True}
+        path = res[0] if isinstance(res, (list, tuple)) else res
+        return {"ok": True, "path": str(path), "url": f"/api/localimg?path={quote(str(path))}"}
+    except Exception as e:
+        return JSONResponse({"error": f"无法弹出选择框：{e}"}, status_code=400)
 
 
 class UploadBody(BaseModel):
     items: list[UploadItem] = []
     account_ids: list[str] = []      # 发到哪些账号（空=所有在线账号）
-    distribute: str = "multi"        # multi=多对一(每号发全部) / one2one=一对一(视频平摊到各号)
+    distribute: str = "multi"        # multi=多对一(每号发全部) / one2one=一对一 / even=均分
     shuffle: bool = False            # 打乱作品顺序
     time_mode: str = "now"           # now=立即 / schedule=平台定时 / local=本机定时
     base_time: str = ""              # "YYYY-MM-DD HH:MM"（定时/本机定时的起始时间）
     clip_gap_sec: int = 0            # 作品间隔（秒）：同账号发多条之间
     acct_gap_sec: int = 0            # 账号间隔（秒）：不同账号之间
+    # —— 均分模式（仿小V猫）——
+    even_per_day: int = 1            # 每个号一天发几条
+    even_dispatch: str = "single"    # single=单号优先 / rotate=顺序循环分派
+    even_multiday: bool = True       # 多日循环：一天发不完滚到下一天(时间点平移)
+    # —— 视频号发布设置（选账号后那一栏，套用所有作品）——
+    ch_statement: str = ""           # 视频声明：无需申明/含AI生成内容/…
+    ch_at: str = ""                  # @视频号（昵称/id）
+    ch_at_pos: str = "tail"          # @追加到简介位置：tail末尾 / head开头
+    ch_location: str = ""            # 地理位置
+    ch_collection: str = ""          # 添加到合集
+    ch_drama: str = ""               # 扩展链接·视频号剧集
+    ch_activity: str = ""            # 活动
 
 
 def _plan_upload(body: "UploadBody"):
@@ -1743,15 +1974,37 @@ def _plan_upload(body: "UploadBody"):
         except Exception:
             base = None
     base = base or datetime.now()
-    plan = []
-    for ai, aid in enumerate(targets):
+
+    def _name(aid):
         acc = _ch_account(aid)
-        aname = acc["name"] if acc else aid
-        my = [items[i] for i in range(len(items)) if i % len(targets) == ai] \
-            if body.distribute == "one2one" and targets else items
-        for ci, it in enumerate(my):
-            at = base + timedelta(seconds=ai * body.acct_gap_sec + ci * body.clip_gap_sec)
-            plan.append((aid, aname, it, at))
+        return acc["name"] if acc else aid
+
+    plan = []
+    A = len(targets)
+    if not A or not items:
+        return targets, plan
+
+    if body.distribute == "even":              # 均分：每号一天 N 条，滚天
+        N = max(1, int(body.even_per_day or 1))
+        cap = A * N                            # 一天总容量
+        for g, it in enumerate(items):
+            day = (g // cap) if body.even_multiday else 0
+            wd = (g % cap) if body.even_multiday else g
+            if body.even_dispatch == "rotate":         # 顺序循环：文件轮流发给各号
+                acct_i, slot = wd % A, wd // A
+            else:                                      # 单号优先：先把一个号填满 N 条
+                acct_i, slot = min(wd // N, A - 1), wd % N
+            aid = targets[acct_i]
+            at = base + timedelta(days=day,
+                                  seconds=acct_i * body.acct_gap_sec + slot * body.clip_gap_sec)
+            plan.append((aid, _name(aid), it, at))
+    else:                                       # multi=每号发全部 / one2one=平摊
+        for ai, aid in enumerate(targets):
+            my = [items[i] for i in range(len(items)) if i % A == ai] \
+                if body.distribute == "one2one" else items
+            for ci, it in enumerate(my):
+                at = base + timedelta(seconds=ai * body.acct_gap_sec + ci * body.clip_gap_sec)
+                plan.append((aid, _name(aid), it, at))
     return targets, plan
 
 
@@ -1774,12 +2027,20 @@ def api_channels_upload(body: UploadBody):
     global _up_seq
     for aid, aname, it, at in plan:
         sched_str = at.strftime("%Y-%m-%d %H:%M") if body.time_mode == "schedule" else ""
+        # @视频号 直接拼进简介（这个不用视频号选择器，纯文本）
+        desc = it.desc
+        if body.ch_at:
+            at_str = "@" + body.ch_at.lstrip("@")
+            desc = (at_str + " " + desc) if body.ch_at_pos == "head" else (desc + " " + at_str).strip()
         _up_seq += 1
         tid = f"u{_up_seq}"
         UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": aname,
                              "title": it.title or Path(it.video_path).stem,
-                             "video_path": it.video_path, "tags": it.tags, "desc": it.desc,
-                             "cover_path": it.cover_path, "original": it.original,
+                             "video_path": it.video_path, "tags": it.tags, "desc": desc,
+                             "cover_path": it.cover_path, "link": it.link, "original": it.original,
+                             "statement": body.ch_statement, "location": body.ch_location,
+                             "collection": body.ch_collection, "drama": body.ch_drama,
+                             "activity": body.ch_activity,
                              "schedule": sched_str,
                              "publish_at": at.timestamp() if body.time_mode == "local" else 0,
                              "when": at.strftime("%m-%d %H:%M") if body.time_mode != "now" else "",
@@ -1871,6 +2132,9 @@ async def _upload_worker():
             ok, msg = await channels.upload(
                 _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
                 desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
+                link=t.get("link", ""), statement=t.get("statement", ""),
+                location=t.get("location", ""), collection=t.get("collection", ""),
+                drama=t.get("drama", ""), activity=t.get("activity", ""),
                 schedule=sched, headless=False, err_dir=DATA,
                 on_status=lambda m: t.update(stage=m))
             t.update(status="done" if ok else "failed", err="" if ok else msg, stage=msg)
@@ -1967,13 +2231,53 @@ async def _dedup_worker():
 JY = {"running": False, "status": "", "made": [], "error": ""}
 
 
+def _mark_jy_gen(names, src="tpl"):
+    """记录本工具生成的草稿（带时间戳，供只认这些 + 定时删除）。src: tpl=做剪映模版 / mix=剪映混剪。"""
+    gen = config.setdefault("jy_gen", [])
+    now = time.time()
+    for n in names:
+        gen[:] = [g for g in gen if g.get("name") != n]
+        gen.insert(0, {"name": n, "ts": now, "src": src})
+    config["jy_gen"] = gen[:500]
+    _save(CONFIG_FILE, config)
+
+
 @app.get("/api/jy/drafts")
-def api_jy_drafts():
+def api_jy_drafts(made_only: bool = False):
+    """made_only=True 只返回「做剪映模版」(src=tpl) 生成过的草稿。"""
     try:
         installed = bool(jianying.find_install_dir())
-        return {"ok": True, "installed": installed, "drafts": jianying.list_drafts()}
+        drafts = jianying.list_drafts()
+        if made_only:
+            tpl = {g["name"] for g in config.get("jy_gen", []) if g.get("src") == "tpl"}
+            drafts = [d for d in drafts if d["name"] in tpl]
+        return {"ok": True, "installed": installed, "drafts": drafts}
     except Exception as e:
         return {"ok": False, "installed": False, "error": str(e)[:150], "drafts": []}
+
+
+def _purge_expired_drafts():
+    """定时删除：把超过设定小时数的"本工具生成草稿"删掉（导出成片后清理剪映用）。"""
+    ad = config.get("jy_autodel") or {}
+    if not ad.get("enable"):
+        return
+    hours = float(ad.get("hours") or 1)
+    cutoff = time.time() - hours * 3600
+    gen = config.get("jy_gen", [])
+    keep, removed = [], []
+    for g in gen:
+        if g.get("ts", 0) < cutoff:
+            try:
+                jianying.delete_draft(g["name"])
+                removed.append(g["name"])
+            except Exception as e:
+                log_err(f"定时删草稿 {g.get('name')} 失败: {e}")
+        else:
+            keep.append(g)
+    if removed:
+        config["jy_gen"] = keep
+        _save(CONFIG_FILE, config)
+        print(f"[JY] 定时删除 {len(removed)} 个过期草稿: {removed}", flush=True)
 
 
 class JyComposeBody(BaseModel):
@@ -1996,6 +2300,7 @@ async def _jy_compose_bg(body: "JyComposeBody"):
             jianying.compose_batch, body.template, folder, body.out_prefix,
             body.count, body.mode, body.n_clips, body.target_sec,
             (body.speed_min, body.speed_max), lambda m: JY.update(status=m))
+        _mark_jy_gen(made, "mix")                # 记进"本工具生成"，供定时删除
         JY.update(made=made, status=f"完成，生成 {len(made)} 个草稿（打开剪映查看）")
     except Exception as e:
         JY.update(error=str(e)[:200], status=f"出错：{str(e)[:120]}")
@@ -2017,6 +2322,143 @@ async def api_jy_compose(body: JyComposeBody):
 @app.get("/api/jy/status")
 def api_jy_status():
     return JY
+
+
+# ---------------- 做剪映模版：读基准草稿的效果层 + 勾选保留生成新模版 ----------------
+@app.get("/api/jy/template_layers")
+def api_jy_template_layers(name: str):
+    try:
+        return {"ok": True, **jianying.template_layers(name)}
+    except Exception as e:
+        return JSONResponse({"error": f"读取模板失败：{str(e)[:150]}"}, status_code=400)
+
+
+@app.get("/api/jy/template_params")
+def api_jy_template_params(name: str):
+    """深度读取：每层视频的透明度/缩放/位移/音量/蒙版参数、特效强度、滤镜值、调整各项、BGM。"""
+    try:
+        return {"ok": True, **jianying.template_params(name)}
+    except Exception as e:
+        log_err(f"读模板参数失败: {e}")
+        return JSONResponse({"error": f"读取失败：{str(e)[:150]}"}, status_code=400)
+
+
+class JyCompose2Body(BaseModel):
+    """cfg.layers[轨道下标] = {action: main/overlay/keep/drop, alpha:[lo,hi], scale:[lo,hi],
+    tx/ty:[lo,hi], volume:[lo,hi], flip_prob:0~1, mask_on:bool, mask:{width/feather/centerX/centerY:[lo,hi]},
+    value:[lo,hi](特效强度/滤镜), params:{brightness:[lo,hi],...}(调整)}
+    cfg.extra_overlays = {count:N, alpha/scale/tx/ty/mask 同上} —— 次轨道加几层视频
+    cfg.bgm = {enable:bool, volume:[lo,hi]} —— 素材库音乐随机选
+    cfg.speed=[lo,hi] cfg.n_clips/mode/target_sec 同老混剪; cfg.library=素材库文件夹"""
+    template: str
+    out_prefix: str = "去重"
+    count: int = 1
+    cfg: dict = {}
+
+
+async def _jy_compose2_bg(body: "JyCompose2Body"):
+    JY.update(running=True, status="开始…", made=[], error="")
+    try:
+        made = await asyncio.to_thread(
+            jianying.compose_batch_v2, body.template, body.cfg, body.out_prefix,
+            body.count, lambda m: JY.update(status=m))
+        _mark_jy_gen(made, "tpl")                # 记进"本工具生成"清单
+        JY.update(made=made, status=f"完成，生成 {len(made)} 个草稿（打开剪映查看）")
+    except Exception as e:
+        JY.update(error=str(e)[:200], status=f"出错：{str(e)[:120]}")
+        log_err(f"剪映模版生成出错: {e}")
+    finally:
+        JY["running"] = False
+
+
+class JyOutDirBody(BaseModel):
+    path: str = ""
+
+
+@app.get("/api/jy/output_dir")
+def api_jy_output_dir_get():
+    return {"path": config.get("jy_output_dir", "")}
+
+
+@app.post("/api/jy/output_dir")
+def api_jy_output_dir_set(body: JyOutDirBody):
+    """设置"生成输出文件夹"：你在剪映把成片导出到这里，视频号发布会从这里读。"""
+    p = (body.path or "").strip()
+    if p:
+        try:
+            Path(p).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return JSONResponse({"error": f"路径不可用：{e}"}, status_code=400)
+    config["jy_output_dir"] = p
+    _save(CONFIG_FILE, config)
+    return {"ok": True, "path": p}
+
+
+class JyAutoDelBody(BaseModel):
+    enable: bool = False
+    hours: float = 1
+
+
+@app.get("/api/jy/autodel")
+def api_jy_autodel_get():
+    ad = config.get("jy_autodel") or {"enable": False, "hours": 1}
+    pending = len(config.get("jy_gen", []))
+    return {**ad, "pending": pending}
+
+
+@app.post("/api/jy/autodel")
+def api_jy_autodel_set(body: JyAutoDelBody):
+    config["jy_autodel"] = {"enable": bool(body.enable), "hours": max(0.1, float(body.hours or 1))}
+    _save(CONFIG_FILE, config)
+    return {"ok": True, **config["jy_autodel"]}
+
+
+@app.post("/api/jy/purge_now")
+def api_jy_purge_now():
+    """立即删除所有本工具生成的草稿（手动清理）。"""
+    gen = config.get("jy_gen", [])
+    removed = []
+    for g in list(gen):
+        try:
+            jianying.delete_draft(g["name"])
+            removed.append(g["name"])
+        except Exception as e:
+            log_err(f"手动删草稿 {g.get('name')} 失败: {e}")
+    config["jy_gen"] = []
+    _save(CONFIG_FILE, config)
+    return {"ok": True, "removed": len(removed)}
+
+
+@app.post("/api/jy/compose2")
+async def api_jy_compose2(body: JyCompose2Body):
+    if JY["running"]:
+        return {"ok": True, "already": True}
+    if not jianying.find_install_dir():
+        return JSONResponse({"error": "没检测到剪映专业版，请先装剪映"}, status_code=400)
+    if not (body.cfg.get("library") or "").strip():
+        return JSONResponse({"error": "先填素材库文件夹"}, status_code=400)
+    asyncio.create_task(_jy_compose2_bg(body))
+    return {"ok": True}
+
+
+class JyMakeTplBody(BaseModel):
+    base: str                    # 基准草稿（你在剪映里手搭好的）
+    out_name: str                # 新模版名
+    drop_indexes: list[int] = [] # 要去掉的效果层轨道下标（没勾选保留的）
+
+
+@app.post("/api/jy/make_template")
+def api_jy_make_template(body: JyMakeTplBody):
+    if not jianying.find_install_dir():
+        return JSONResponse({"error": "没检测到剪映专业版，请先装剪映"}, status_code=400)
+    if not (body.out_name or "").strip():
+        return JSONResponse({"error": "请填模版名"}, status_code=400)
+    try:
+        name = jianying.make_template(body.base, body.out_name.strip(), body.drop_indexes)
+        return {"ok": True, "name": name}
+    except Exception as e:
+        log_err(f"做剪映模版出错: {e}")
+        return JSONResponse({"error": f"生成失败：{str(e)[:150]}"}, status_code=400)
 
 
 @app.get("/api/check_update")
