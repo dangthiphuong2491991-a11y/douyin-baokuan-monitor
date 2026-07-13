@@ -145,6 +145,10 @@
   .setrow .l .d{color:var(--sub);font-size:12.5px;margin-top:2px}
 
   /* 开关 switch */
+  .mxchip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid var(--line);border-radius:9px;cursor:pointer;font-size:13px;background:var(--card2);user-select:none}
+  .mxchip:hover{border-color:var(--acc)}
+  .mxchip.on{border-color:var(--acc);background:rgba(124,92,255,.14);color:var(--acc2);font-weight:600}
+  .mxchip .mxn{color:var(--sub);font-size:11px}
   .switch{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0}
   .switch input{opacity:0;width:0;height:0}
   .switch .slider{position:absolute;inset:0;background:#3a4055;border-radius:22px;transition:.2s;cursor:pointer}
@@ -945,6 +949,7 @@
               <a class="jvsub on" data-sub="publish" onclick="chSub('publish')"><span class="ic">📹</span>批量发视频</a>
               <a class="jvsub" data-sub="drafts" onclick="chSub('drafts')"><span class="ic">📁</span>本地草稿箱</a>
               <a class="jvsub" data-sub="tasks" onclick="chSub('tasks')"><span class="ic">📋</span>任务记录</a>
+              <a class="jvsub" data-sub="matrix" onclick="chSub('matrix')"><span class="ic">🎛️</span>矩阵分发</a>
             </div>
             <!-- 主区 -->
             <div style="flex:1;min-width:0;display:flex;flex-direction:column">
@@ -1145,6 +1150,23 @@
                     <button class="btn" style="margin-left:auto" onclick="chSaveDraft().then(loadDraftList)">💾 把当前配置存为草稿</button>
                   </div>
                   <div id="chDraftList" style="display:flex;flex-direction:column;gap:8px"></div>
+                </div>
+
+                <!-- 矩阵分发：手动把剧分给账号 -->
+                <div class="jvview" id="jv-matrix" style="display:none;height:100%;flex-direction:column">
+                  <div style="padding:14px 18px;border-bottom:1px solid var(--line)">
+                    <div style="font-weight:800;font-size:16px">🎛️ 矩阵分发 · 手动把剧分给账号</div>
+                    <div style="color:var(--sub);font-size:12px;margin-top:3px">给每个账号勾选它要发的剧(可多部)。各账号<b>并行发</b>、按<b>集数顺序</b>；<b>已发过的自动跳过</b>，软件崩了重启<b>自动续发</b>。</div>
+                  </div>
+                  <div id="matrixWrap" style="flex:1;overflow:auto;padding:16px 18px">
+                    <div class="empty"><div class="big">⏳</div>加载账号和剧…</div>
+                  </div>
+                  <div id="matrixBar" style="display:none;border-top:1px solid var(--line);padding:12px 18px;gap:12px;align-items:center;background:var(--card);flex-wrap:wrap">
+                    <label style="font-size:12px;color:var(--sub);white-space:nowrap">📅 每号每天最多 <input type="number" id="mxPerDay" value="0" min="0" max="500" style="width:62px" oninput="mxUpdateHint()"> 条 <span style="color:var(--dim)">(0=不限·一次发完)</span></label>
+                    <span id="matrixHint" style="color:var(--sub);font-size:12px;flex:1;min-width:160px">未选择</span>
+                    <button class="btn ghost" onclick="matrixPreview()">👁 预览计划</button>
+                    <button class="btn" onclick="matrixSubmit(this)" style="background:var(--acc2);color:#fff;font-weight:700">🚀 一键矩阵发布</button>
+                  </div>
                 </div>
 
                 <!-- 任务记录（仿小V猫：筛选条 + 富信息行 + 底部批量操作） -->
@@ -2291,9 +2313,125 @@ function chFn(fn){
 function chSub(sub){
   document.querySelectorAll('#fn-publish .jvsub').forEach(a=>a.classList.toggle('on',a.dataset.sub===sub));
   document.querySelectorAll('#fn-publish .jvview').forEach(v=>v.style.display='none');
-  const el=document.getElementById('jv-'+sub); if(el) el.style.display=(sub==='publish'||sub==='tasks')?'flex':'block';
+  const el=document.getElementById('jv-'+sub); if(el) el.style.display=(sub==='publish'||sub==='tasks'||sub==='matrix')?'flex':'block';
   if(sub==='drafts') loadDraftList();
   if(sub==='tasks') refreshChannels();
+  if(sub==='matrix') loadMatrix();
+}
+
+/* ===== 矩阵分发：手动把剧分给账号 ===== */
+let MX_ACCTS=[], MX_FOLDERS=[], mxSel={}, mxDrama={}, mxDramaCache={}, mxLoadingDrama={};
+// mxSel[aid]=Set(folder) · mxDrama[aid][folder]={exportId,name} · mxDramaCache[aid]=[该号剧集]
+async function loadMatrix(){
+  const wrap=document.getElementById('matrixWrap');
+  wrap.innerHTML='<div class="empty"><div class="big">⏳</div>加载账号和剧…</div>';
+  try{
+    const [accs, fo] = await Promise.all([ api('/api/channels/accounts'), api('/api/channels/matrix/folders') ]);
+    MX_ACCTS=(accs.accounts||[]).filter(a=>a.online);
+    MX_FOLDERS=fo.folders||[];
+    if(!MX_ACCTS.length){ wrap.innerHTML=emptyBox('📭','没有在线账号','先去「账号管理」登录视频号，再来分配'); document.getElementById('matrixBar').style.display='none'; return; }
+    if(!MX_FOLDERS.length){ wrap.innerHTML=emptyBox('📭','没有可分配的剧','先去「一键去重导出」生成成品，输出目录下每个剧文件夹就是一部剧'); document.getElementById('matrixBar').style.display='none'; return; }
+    renderMatrix();
+    document.getElementById('matrixBar').style.display='flex';
+  }catch(e){ wrap.innerHTML=emptyBox('⚠','加载失败',e.message); }
+}
+function renderMatrix(){
+  const wrap=document.getElementById('matrixWrap');
+  wrap.innerHTML = MX_ACCTS.map(a=>{
+    const sel=mxSel[a.id]||new Set();
+    const chips = MX_FOLDERS.map(f=>{
+      const on=sel.has(f.folder), fn=esc(f.folder).replace(/'/g,"\\'");
+      return `<label class="mxchip ${on?'on':''}" onclick="mxToggle('${a.id}','${fn}')"><span>${esc(f.folder)}</span><span class="mxn">${f.count}集</span></label>`;
+    }).join('');
+    const eps=[...sel].reduce((s,f)=>s+((MX_FOLDERS.find(x=>x.folder===f)||{}).count||0),0);
+    const cache=mxDramaCache[a.id];
+    const dramaRows=[...sel].map(f=>{
+      const cur=(mxDrama[a.id]||{})[f]; const fn=esc(f).replace(/'/g,"\\'");
+      let ctrl;
+      if(mxLoadingDrama[a.id]) ctrl='<span style="color:var(--sub);font-size:12px">拉取中…</span>';
+      else if(!cache) ctrl='<span style="color:var(--dim);font-size:12px">先点上方「拉取本号剧集」</span>';
+      else if(!cache.length) ctrl='<span style="color:var(--dim);font-size:12px">该号没有剧集</span>';
+      else{
+        const opts=['<option value="">不挂剧集</option>'].concat(cache.map(d=>`<option value="${esc(d.exportId)}" ${cur&&cur.exportId===d.exportId?'selected':''}>${esc(d.name)}（${d.count}集）</option>`)).join('');
+        ctrl=`<select onchange="mxSetDrama('${a.id}','${fn}',this)" style="min-width:190px;max-width:280px">${opts}</select>`;
+      }
+      return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+        <span style="font-size:13px;flex:0 1 auto;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🎬 ${esc(f)}</span>
+        <span style="color:var(--dim)">→</span>${ctrl}</div>`;
+    }).join('');
+    return `<div class="card" style="padding:14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <b>${esc(a.name||a.id)}</b>
+        <span style="color:var(--sub);font-size:12px">已选 ${sel.size} 部 · 共 ${eps} 集</span>
+        <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="mxFetchDrama('${a.id}')">${cache?('🔄 重拉剧集('+cache.length+')'):'🎬 拉取本号剧集'}</button>
+        ${sel.size?`<a onclick="mxClear('${a.id}')" style="margin-left:auto;color:var(--acc2);cursor:pointer;font-size:12px">清空</a>`:''}
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>
+      ${sel.size?`<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">${dramaRows}</div>`:''}
+    </div>`;
+  }).join('');
+  mxUpdateHint();
+}
+function mxToggle(aid, folder){
+  const s=mxSel[aid]||(mxSel[aid]=new Set());
+  if(s.has(folder)) s.delete(folder); else s.add(folder);
+  renderMatrix();
+}
+function mxClear(aid){ mxSel[aid]=new Set(); renderMatrix(); }
+function mxSetDrama(aid, folder, selEl){
+  const eid=selEl.value; mxDrama[aid]=mxDrama[aid]||{};
+  if(!eid){ delete mxDrama[aid][folder]; }
+  else{ const d=(mxDramaCache[aid]||[]).find(x=>x.exportId===eid); mxDrama[aid][folder]={exportId:eid, name:d?d.name:''}; }
+}
+async function mxFetchDrama(aid){
+  mxLoadingDrama[aid]=true; renderMatrix();
+  try{
+    await api('/api/channels/account/'+aid+'/fetch_lists','POST');
+    let got=null;
+    for(let i=0;i<40;i++){
+      await new Promise(r=>setTimeout(r,1500));
+      const s=await api('/api/channels/lists_status');
+      if(!s.running){ got=((s.data||{}).dramas)||[]; break; }
+    }
+    mxDramaCache[aid]=got||[];
+    toast(`「${(MX_ACCTS.find(a=>a.id===aid)||{}).name||aid}」拉到 ${mxDramaCache[aid].length} 部剧集`);
+  }catch(e){ uiAlert(e.message); mxDramaCache[aid]=mxDramaCache[aid]||[]; }
+  mxLoadingDrama[aid]=false; renderMatrix();
+}
+function mxAcctEps(a){ const s=mxSel[a.id]||new Set(); return [...s].reduce((x,f)=>x+((MX_FOLDERS.find(y=>y.folder===f)||{}).count||0),0); }
+function mxUpdateHint(){
+  let acc=0, eps=0, maxEps=0;
+  MX_ACCTS.forEach(a=>{ const e=mxAcctEps(a); if((mxSel[a.id]||new Set()).size){ acc++; eps+=e; maxEps=Math.max(maxEps,e); } });
+  const pd=parseInt(document.getElementById('mxPerDay')?.value)||0;
+  let extra='';
+  if(pd>0 && acc){ const days=Math.max(1,Math.ceil(maxEps/pd)); extra=` · 每号每天≤${pd}条，约排 <b>${days}</b> 天发完`; }
+  document.getElementById('matrixHint').innerHTML = acc?`${acc} 个账号 · 共 <b>${eps}</b> 条待发${extra}`:'给账号勾选要发的剧';
+}
+function mxBody(){
+  const assigns=MX_ACCTS.filter(a=>(mxSel[a.id]||new Set()).size).map(a=>{
+    const folders=[...(mxSel[a.id]||[])], dramas={}, drama_titles={};
+    Object.entries(mxDrama[a.id]||{}).forEach(([f,d])=>{ if(folders.includes(f)&&d&&d.exportId){ dramas[f]=d.exportId; drama_titles[f]=d.name||''; } });
+    return {account_id:a.id, folders, dramas, drama_titles};
+  });
+  return { assigns, title:(typeof XV_DEF_TITLE!=='undefined'?XV_DEF_TITLE:''), tags:[],
+    per_day: parseInt(document.getElementById('mxPerDay')?.value)||0, clip_gap_sec: 0 };
+}
+async function matrixPreview(){
+  const b=mxBody(); if(!b.assigns.length){ uiAlert('先给账号勾选要发的剧'); return; }
+  try{ const d=await api('/api/channels/matrix/preview','POST',b);
+    const lines=(d.accounts||[]).map(x=>`· ${x.account_name}：${x.count} 集（${Object.entries(x.folders).map(([k,v])=>k+' '+v+'集').join('、')}）`).join('\n');
+    uiAlert(`共 ${d.total} 条待发${d.skipped?('，另跳过 '+d.skipped+' 条已发过'):''}\n\n${lines}`,'📋 发布计划预览');
+  }catch(e){ uiAlert(e.message); }
+}
+async function matrixSubmit(btn){
+  const b=mxBody(); if(!b.assigns.length){ uiAlert('先给账号勾选要发的剧'); return; }
+  if(!await uiConfirm('按当前分配开始发布？各账号并行发、已发过的自动跳过。','🚀 矩阵发布')) return;
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='提交中…';
+  try{ const d=await api('/api/channels/matrix/upload','POST',b);
+    toast(`已入队 ${d.queued} 条${d.skipped?('，跳过 '+d.skipped+' 已发'):''}${d.days>1?('，每号排 '+d.days+' 天发完'):''}，去任务记录看进度`);
+    chSub('tasks');
+  }catch(e){ uiAlert(e.message); }
+  btn.disabled=false; btn.innerHTML=old;
 }
 
 /* ===== 仿小V猫 批量发视频 交互 ===== */

@@ -118,9 +118,10 @@ def _load_upload_tasks():
         if not UP_TASKS_FILE.exists():
             return
         for t in json.loads(UP_TASKS_FILE.read_text(encoding="utf-8")):
-            if t.get("status") in ("queued", "running"):   # 上次没跑完的标记中断
-                t["status"] = "cancelled"
-                t["err"] = t.get("err") or "软件重启，任务中断"
+            if t.get("status") in ("queued", "running"):   # 上次没跑完的→回到排队,startup 自动续跑(断点续传)
+                t["status"] = "queued"
+                t["stage"] = "软件重启，排队续跑…"
+                t["err"] = ""
             UPLOAD_TASKS[t["id"]] = t
             try:
                 _up_seq = max(_up_seq, int(str(t["id"]).lstrip("u")))
@@ -2335,6 +2336,156 @@ def api_channels_upload(body: UploadBody):
     return {"ok": True, "queued": len(plan), "accounts": len(targets)}
 
 
+# ---------------- 矩阵分发：手动把「剧」分配给「账号」(账号1发这几部、账号2发另几部) ----------------
+class MatrixAssign(BaseModel):
+    account_id: str
+    folders: list[str] = []          # 该账号要发的剧文件夹名(输出目录下一级子文件夹)
+    dramas: dict = {}                # {文件夹名: 剧集exportId} 每部剧关联的视频号剧集(可选)
+    drama_titles: dict = {}          # {文件夹名: 剧名}
+
+
+class MatrixBody(BaseModel):
+    assigns: list[MatrixAssign] = []
+    root: str = ""                   # 剧文件夹根,默认去重成品输出目录
+    title: str = ""                  # 标题模板(空=用文件名)
+    tags: list[str] = []
+    desc: str = ""
+    per_day: int = 0                 # 每个号一天最多发几条(0=不限,全部立即排队);超出的滚到后续天
+    start_time: str = ""             # 排期起始 "YYYY-MM-DD HH:MM"(空=现在)
+    clip_gap_sec: int = 0            # 同号相邻两条的间隔秒(防频控)
+
+
+def _folder_vids_sorted(root: Path, folder: str):
+    """列一个剧文件夹下的视频，按集数升序(第1集..第N集)，排除 .part 半成品。"""
+    d = root / folder
+    if not d.exists() or not d.is_dir():
+        return []
+    vids = [f for f in d.rglob("*.mp4") if f.is_file() and not _is_incomplete(f.name)]
+
+    def _epk(f):
+        b = f.stem
+        m = re.search(r"第\s*(\d+)", b) or re.match(r"(\d+)", b) or re.search(r"(\d+)", b)
+        return (int(m.group(1)) if m else 10 ** 9, b)
+    vids.sort(key=_epk)
+    return vids
+
+
+def _matrix_root(explicit: str = "") -> Path:
+    """矩阵分发的剧文件夹根：和「一键去重导出」输出目录一致(fd_out→jy_output_dir→默认)，
+    否则默认路径可能是空的、列不出剧。"""
+    if explicit:
+        return Path(explicit)
+    fc = config.get("ffdedup_cfg") or {}
+    return Path((fc.get("fd_out") or "").strip()
+                or (config.get("jy_output_dir") or "").strip()
+                or str(_dedup_out_dir()))
+
+
+def _matrix_build(body: "MatrixBody"):
+    """把分配表展开成发布计划：[(account_id, video_path, folder, drama, drama_title)]。
+    已发成功过的(视频×账号)自动跳过(幂等)。"""
+    root = _matrix_root(body.root)
+    plan, skipped = [], 0
+    for a in body.assigns:
+        if not a.account_id:
+            continue
+        for folder in (a.folders or []):
+            for v in _folder_vids_sorted(root, folder):
+                vp = str(v)
+                if _already_done(a.account_id, vp):
+                    skipped += 1
+                    continue
+                plan.append((a.account_id, vp, folder,
+                             (a.dramas or {}).get(folder, ""),
+                             (a.drama_titles or {}).get(folder, "")))
+    return root, plan, skipped
+
+
+@app.get("/api/channels/matrix/folders")
+def api_ch_matrix_folders(root: str = ""):
+    """列出可分配的剧文件夹(去重成品输出目录下的一级子文件夹)+每个的集数。"""
+    base = _matrix_root(root)
+    out = []
+    if base.exists():
+        for d in sorted([x for x in base.iterdir() if x.is_dir()], key=lambda p: p.name):
+            n = len([f for f in d.rglob("*.mp4") if f.is_file() and not _is_incomplete(f.name)])
+            if n:
+                out.append({"folder": d.name, "count": n})
+    return {"root": str(base), "folders": out}
+
+
+@app.post("/api/channels/matrix/preview")
+def api_ch_matrix_preview(body: MatrixBody):
+    """预览：每个账号发哪几部剧、共多少条、跳过多少(已发过的)。发前核对用。"""
+    root, plan, skipped = _matrix_build(body)
+    online = {a["id"] for a in _ch_accounts() if ch_online(a["id"])}
+    by_acct = {}
+    for aid, vp, folder, drama, dtitle in plan:
+        d = by_acct.setdefault(aid, {"account_id": aid,
+                                     "account_name": (_ch_account(aid) or {}).get("name", aid),
+                                     "online": aid in online, "count": 0, "folders": {}})
+        d["count"] += 1
+        d["folders"][folder] = d["folders"].get(folder, 0) + 1
+    return {"total": len(plan), "skipped": skipped, "root": str(root),
+            "accounts": list(by_acct.values())}
+
+
+@app.post("/api/channels/matrix/upload")
+def api_ch_matrix_upload(body: MatrixBody):
+    """执行：按分配表建发布任务并入队。每账号独立 worker 并行发；已发过的自动跳过。"""
+    global _up_seq
+    root, plan, skipped = _matrix_build(body)
+    if not plan:
+        return {"ok": True, "queued": 0, "skipped": skipped,
+                "note": "没有可发的(可能都已发过、或所选文件夹为空)"}
+    per_day = max(0, int(body.per_day or 0))
+    gap = max(0, int(body.clip_gap_sec or 0))
+    base = datetime.now()
+    if body.start_time:
+        try:
+            base = datetime.strptime(body.start_time, "%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    timed = per_day > 0 or gap > 0 or bool(body.start_time)   # 要按时间排期(本机定时到点发)
+    batch = datetime.now().strftime("矩阵 %m-%d %H:%M:%S")
+    now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hm = datetime.now().strftime("%H:%M:%S")
+    # 按账号分组，每账号内按顺序排期：每天最多 per_day 条，超出滚到后续天
+    by_acct = {}
+    for item in plan:
+        by_acct.setdefault(item[0], []).append(item)
+    n, max_day = 0, 0
+    for aid, items in by_acct.items():
+        acc = _ch_account(aid) or {}
+        for k, (aid2, vp, folder, drama, dtitle) in enumerate(items):
+            day, slot = (k // per_day, k % per_day) if per_day > 0 else (0, k)
+            max_day = max(max_day, day)
+            at = base + timedelta(days=day, seconds=slot * gap)
+            publish_at = at.timestamp() if timed else 0
+            when = at.strftime("%m-%d %H:%M") if timed else ""
+            _up_seq += 1
+            tid = f"u{_up_seq}"
+            try:
+                size_mb = round(Path(vp).stat().st_size / 1024 / 1024, 1)
+            except Exception:
+                size_mb = 0
+            UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": acc.get("name", aid),
+                                 "account_wxid": acc.get("wxid", ""),
+                                 "title": body.title or Path(vp).stem,
+                                 "video_path": vp, "tags": body.tags, "desc": body.desc,
+                                 "cover_path": "", "link": "", "original": False,
+                                 "statement": "", "location": "", "collection": "",
+                                 "drama": drama, "drama_title": dtitle, "activity": "",
+                                 "schedule": "", "publish_at": publish_at, "when": when,
+                                 "status": "queued", "stage": "", "err": "",
+                                 "created": now_s, "exec_at": "", "done_at": "", "elapsed": "",
+                                 "size_mb": size_mb, "batch": batch, "vtype": "视频", "ts": hm}
+            _enqueue_upload(tid)
+            n += 1
+    _save_upload_tasks()
+    return {"ok": True, "queued": n, "skipped": skipped, "accounts": len(by_acct), "days": max_day + 1}
+
+
 class PubSettingsBody(BaseModel):
     max_concurrent: int = 3
     show_browser: bool | None = None
@@ -2534,6 +2685,18 @@ def _up_sem() -> asyncio.Semaphore:
     return UP_SEM
 
 
+def _already_done(aid: str, video_path: str, cur_tid: str = "") -> bool:
+    """幂等：这条视频对这个账号是否已发成功过(status=done)。
+    防断点续跑/重复入队/重复点击导致重复发(重复发同一条会触发视频号实名验证)。"""
+    if not video_path:
+        return False
+    for x in UPLOAD_TASKS.values():
+        if x.get("id") != cur_tid and x.get("account_id") == aid \
+                and x.get("video_path") == video_path and x.get("status") == "done":
+            return True
+    return False
+
+
 def _enqueue_upload(tid: str):
     """把一条上传任务派到它所属账号的队列，并确保该账号的工人在跑。
     不同账号 → 不同工人 → 并行；同账号 → 同一工人 → 串行+间隔。
@@ -2574,6 +2737,12 @@ async def _acct_upload_worker(aid: str):
             return
         t = UPLOAD_TASKS.get(tid)
         if not t or t["status"] != "queued":
+            continue
+        # 【幂等】这条视频对这个账号已发成功过 → 直接跳过，绝不重复发(防断点续跑/重复入队重发)
+        if _already_done(aid, t.get("video_path", ""), tid):
+            t.update(status="done", err="", stage="该账号已发过这条·自动跳过",
+                     done_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), elapsed="跳过")
+            _save_upload_tasks()
             continue
         if not aid or aid == "_" or not ch_online(aid):
             t.update(status="failed", err="该账号未登录",
