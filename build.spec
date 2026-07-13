@@ -2,7 +2,7 @@
 # 打包命令：pyinstaller build.spec
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [('static', 'static')]
+datas = [('static', 'static'), ('version.json', '.')]   # version.json 进包→exe 内部版本号=打包时的 version.json(不再写死脱节)
 binaries = []
 hiddenimports = ['app', 'channels']
 

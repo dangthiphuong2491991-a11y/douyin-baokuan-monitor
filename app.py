@@ -48,7 +48,17 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.14"
+def _read_version():
+    """版本号统一从 version.json 读，避免和 GitHub 上的脱节(打包时 version.json 一并进包)。
+    以前写死常量、bump 时忘改→exe 内部版本永远落后→死循环提示更新。改成读文件根治。"""
+    try:
+        import json as _json
+        return str(_json.loads((BASE / "version.json").read_text(encoding="utf-8")).get("version", "1.0.16"))
+    except Exception:
+        return "1.0.16"
+
+
+VERSION = _read_version()
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -424,8 +434,17 @@ async def download_aweme_media(nickname: str, aweme: dict, platform: str = "douy
     return False, ""
 
 
+_DL_TAGS_CACHE = {}   # {(platform,nickname): (expire_ts, tags)} —— /api/status 每10秒轮询,别每次都扫盘
+
+
 def _downloaded_tags(nickname: str, platform: str = "douyin") -> set:
-    """已下载作品的 id 尾6位集合。只认正片（.mp4 视频 / _NN.jpeg 图集），封面 .jpg 不算下载。"""
+    """已下载作品的 id 尾6位集合。只认正片（.mp4 视频 / _NN.jpeg 图集），封面 .jpg 不算下载。
+    【性能】前端每10秒轮询 /api/status,每次对每个博主扫一遍下载文件夹(iterdir+正则)——
+    下载越多越慢。加 12s TTL 缓存;下载完成时主动清缓存(_dl_tags_invalidate),角标依旧即时。"""
+    key = (platform, nickname)
+    hit = _DL_TAGS_CACHE.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
     folder = platform_dir(platform) / sanitize(nickname, 30)
     tags = set()
     if folder.exists():
@@ -433,7 +452,12 @@ def _downloaded_tags(nickname: str, platform: str = "douyin") -> set:
             m = re.search(r"_(\d{6})\.mp4$", f.name) or re.search(r"_(\d{6})_\d+\.jpe?g$", f.name)
             if m:
                 tags.add(m.group(1))
+    _DL_TAGS_CACHE[key] = (time.time() + 12, tags)
     return tags
+
+
+def _dl_tags_invalidate():
+    _DL_TAGS_CACHE.clear()
 
 
 def _mix_episodes_done(nickname: str, mix_name: str, platform: str = "douyin") -> set:
@@ -764,6 +788,14 @@ async def _startup():
     asyncio.create_task(_ch_keepalive_loop())  # 视频号登录保活：每4小时静默续期一次cookie
     asyncio.create_task(_dedup_worker())     # 视频去重：单工人（ffmpeg 吃 CPU）
     _fd_resume_pending()                     # 去重导出：重启自动续跑上次没完成的批次
+    # 【清理】f2 抓取日志会无限堆积(一天好几个文件),启动时删 7 天前的
+    try:
+        cutoff = time.time() - 7 * 86400
+        for lf in (APP_DIR / "logs").glob("*.log*"):
+            if lf.is_file() and lf.stat().st_mtime < cutoff:
+                lf.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1021,6 +1053,8 @@ async def _dl_worker():
                 else:
                     ok, _u = await download_aweme_media(nm, aweme, platform)
                 t["status"] = "done" if ok else "failed"
+                if ok:
+                    _dl_tags_invalidate()   # 下载落盘→清"已下载"缓存,角标即时变绿
                 if not ok:
                     t["err"] = "没拿到下载地址或写文件失败"
             else:

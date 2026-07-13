@@ -184,7 +184,42 @@ def fp_diff_score(src_first_ep, out_path, spd=1.0, head=0.0):
         return None
 
 
-def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None):
+import threading as _threading
+_MASK_ORDER = {}                      # {(folder, group_key): 素材顺序} 同一视频各变体共享,按变体号取→不重复
+_MASK_ORDER_LOCK = _threading.Lock()
+
+
+def _distinct_pick(vids, n):
+    """给 n 个变体分配素材，尽量两两不同：素材数≥n 用 sample(严格不重复)；不够则洗牌轮询(相邻不重复)。"""
+    if not vids:
+        return [None] * n
+    if len(vids) >= n:
+        return random.sample(vids, n)
+    out, pool = [], []
+    while len(out) < n:
+        if not pool:
+            pool = random.sample(vids, len(vids))
+            if out and pool and pool[0] == out[-1] and len(pool) > 1:
+                pool.append(pool.pop(0))
+        out.append(pool.pop(0))
+    return out
+
+
+def _assign_mask(vids, folder, group_key, v, nv):
+    """同一视频(group_key)的 nv 个变体，按变体号 v 取不重复的蒙版素材：首个变体定这一组随机顺序并缓存，
+    后续变体复用同一顺序 → 上/下各自两两不同(素材够时严格不重复，不够时轮询不相邻重复)。"""
+    if not vids:
+        return None
+    ck = (folder, group_key)
+    with _MASK_ORDER_LOCK:
+        order = _MASK_ORDER.get(ck)
+        if order is None:
+            order = _distinct_pick(vids, max(1, int(nv or 1)))
+            _MASK_ORDER[ck] = order
+    return order[v % len(order)]
+
+
+def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, variant=(0, 1)):
     """把 main_paths（一集或多集顺序拼接）去重合成到 out_path。返回 out_path。
     params_out=dict 时回填本次随机抽到的 spd/head(供自检分对齐时间轴)。"""
     # 【提速44%·实测】输出分辨率跟随源：抖音源基本是720x1280，先放大到1080再跑全部重滤镜
@@ -259,6 +294,15 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None):
         vf += f",vignette=angle={_rr(vg.get('range'), 0.15):.3f}"  # 轻暗角
     if cfg.get("noise"):
         vf += ",noise=alls=6:allf=t"                         # 极淡噪点
+    # 【动态运镜·改结构去重】放大留余量,裁切窗口按正弦缓慢漂移(x/y 不同频率→椭圆浮动,永不重复)。
+    # 逐帧裁切位置都不同→彻底打乱平台的逐帧感知哈希/帧序列指纹;漂移幅度=amp(默认4%)且极慢→肉眼无感。
+    motion = cfg.get("motion") or {}
+    if motion.get("enable"):
+        amp = max(0.0, min(0.12, _rr(motion.get("amp"), 0.04)))
+        Wm = (int(W * (1 + amp)) // 2) * 2
+        Hm = (int(H * (1 + amp)) // 2) * 2
+        vf += (f",scale={Wm}:{Hm},crop={W}:{H}:"
+               f"x=(iw-ow)*(0.5+0.5*sin(t*0.10)):y=(ih-oh)*(0.5+0.5*sin(t*0.13))")
     vf += f",setpts=PTS/{spd},fps=30,format=yuv420p"
     fc.append(f"{vsrc}{vf}[m]")
     cur = "[m]"
@@ -295,7 +339,8 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None):
         op = max(0.0, min(1.0, _rr(bands.get("opacity"), 0.7)))   # 每条带独立随机峰值透明度
         # band_h 配置值按 1080x1920 设计——输出分辨率变了(如720x1280)按高度等比缩放
         bh = max(2, int(_rr(bands.get("band_h"), 430) * H / 1920))
-        bv = random.choice(vids)
+        _gk = re.sub(r'(_变体\d+)?\.mp4$', '', os.path.basename(out_path))   # 同一视频各变体 group_key 相同
+        bv = _assign_mask(vids, b.get("folder"), _gk, variant[0], variant[1])
         sw, sh = _probe_wh(bv)
         blk = max(2, (int(W * sh / max(sw, 1)) // 2) * 2)     # 等比缩放后的块高(取偶)
         fade = min(bh, blk)
@@ -355,7 +400,9 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None):
         vol = _rr(bgm.get("volume"), 0.18)
         fc.append(f"[{idx}:a]volume={vol}[bgm{idx}]")
         if acur:                                              # 原声 + BGM 混音
-            fc.append(f"{acur}[bgm{idx}]amix=inputs=2:duration=first:dropout_transition=0[aout]")
+            # normalize=0：原声保持 100% 不变，BGM 按设定音量(0.1~0.16)隐约叠上去。
+            # 默认 normalize=1 会把两路都归一化(各除以2)→原声被砍半(-6dB),实测确认,故关掉。
+            fc.append(f"{acur}[bgm{idx}]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
             acur = "[aout]"
         else:                                                 # 原片没音轨→BGM 直接当声音
             acur = f"[bgm{idx}]"
@@ -504,7 +551,7 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
             for v in range(nv):
                 # 变体：同一成品渲染N个不同随机参数的版本(多账号各发一个,指纹互不相同)
                 name = base if v == 0 else f"{base}_变体{v+1}"
-                tasks.append((chunk, os.path.join(sub, name + ".mp4"), name, safe))
+                tasks.append((chunk, os.path.join(sub, name + ".mp4"), name, safe, (v, nv)))
 
     total = len(tasks)
     made = []
@@ -512,7 +559,7 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
     done_n = [0]
 
     def _run(task):
-        chunk, out, name, safe = task
+        chunk, out, name, safe, _variant = task
 
         def _fmt_dur(sec):
             sec = int(sec)
@@ -557,7 +604,7 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
         t0 = _time.time()
         try:
             pr = {}
-            dedup_render(chunk, cfg, out, None, params_out=pr)  # 并发时不串 on_status
+            dedup_render(chunk, cfg, out, None, params_out=pr, variant=_variant)  # 并发时不串 on_status
             try:
                 mb = round(os.path.getsize(out) / 1024 / 1024, 1)
             except OSError:

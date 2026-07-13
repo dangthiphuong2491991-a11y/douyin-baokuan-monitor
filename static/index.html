@@ -777,20 +777,20 @@
 
         <!-- 变速 + 调色 -->
         <div class="card" style="padding:16px 18px;margin-bottom:14px">
-          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 变速 + 调色 <span style="color:var(--dim);font-weight:400;font-size:12px">每条在区间内随机取值 · 小幅改动去重</span></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">变速</div><div class="d">建议 1.02~1.04</div></div>
-            <input type="number" class="fdC" id="fd_spd_lo" value="1.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_spd_hi" value="1.04" step="0.01" style="width:76px" onchange="saveFdCfg()"> 倍</div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">亮度</div><div class="d">±小幅 · 建议 0.02~0.05</div></div>
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 变速 + 调色 <span style="color:var(--dim);font-weight:400;font-size:12px">变速破时长指纹(有用)；调色几乎不改指纹(实测≈0)、只是观感伪装</span></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">变速 <span style="color:var(--acc2);font-size:11px">✓真去重</span></div><div class="d">建议 1.03~1.05 · 破时长+音频节奏,这组唯一真去重的</div></div>
+            <input type="number" class="fdC" id="fd_spd_lo" value="1.03" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_spd_hi" value="1.05" step="0.01" style="width:76px" onchange="saveFdCfg()"> 倍</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">亮度</div><div class="d">±小幅 · 建议 0.02~0.05 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_bri_lo" value="0.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bri_hi" value="0.05" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">对比度</div><div class="d">建议 1.02~1.06</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">对比度</div><div class="d">建议 1.02~1.06 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_con_lo" value="1.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_con_hi" value="1.06" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">饱和度</div><div class="d">建议 1.03~1.08</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">饱和度</div><div class="d">建议 1.05~1.10 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_sat_lo" value="1.03" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_sat_hi" value="1.08" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">锐化</div><div class="d">建议 0.3~0.5</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">锐化</div><div class="d">建议 0.3~0.5 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_shp_lo" value="0.3" step="0.05" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_shp_hi" value="0.5" step="0.05" style="width:76px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">色相偏移</div><div class="d">±度数 · 建议 -6~6</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">色相偏移</div><div class="d">±度数 · 建议 -6~6 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_hue_lo" value="-6" step="1" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_hue_hi" value="6" step="1" style="width:76px" onchange="saveFdCfg()"> °</div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">Gamma</div><div class="d">明暗曲线微调 · 建议 0.97~1.03</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">Gamma</div><div class="d">明暗曲线微调 · 对指纹≈0,纯观感</div></div>
             <input type="number" class="fdC" id="fd_gam_lo" value="0.97" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_gam_hi" value="1.03" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
         </div>
 
@@ -802,10 +802,13 @@
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">微旋转</div><div class="d">整帧哈希整体位移，方向随机、自动放大补角 · 建议 0.2~0.6</div></div>
             <input type="number" class="fdC" id="fd_rot_lo" value="0.2" step="0.1" min="0" max="3" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_rot_hi" value="0.6" step="0.1" min="0" max="3" style="width:76px" onchange="saveFdCfg()"> °</div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">广角畸变</div><div class="d">镜头桶形畸变（对应剪映"广角"特效） · 建议 0.02~0.06</div></div>
-            <input type="number" class="fdC" id="fd_lens_lo" value="0.02" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_lens_hi" value="0.06" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"></div>
+            <input type="number" class="fdC" id="fd_lens_lo" value="0.08" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_lens_hi" value="0.10" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">轻暗角</div><div class="d">四角轻微压暗（类似氛围滤镜） · 建议 0.10~0.25</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_vig_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <input type="number" class="fdC" id="fd_vig_lo" value="0.10" step="0.05" min="0" max="0.6" style="width:70px;margin-left:10px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_vig_hi" value="0.25" step="0.05" min="0" max="0.6" style="width:70px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">动态运镜 <span style="color:var(--acc2);font-size:11px">新·强去重</span></div><div class="d">画面按正弦极缓慢漂移，每帧裁切都不同→打乱平台逐帧感知哈希；肉眼几乎无感 · 幅度建议 0.03~0.05</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_motion_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
+            <input type="number" class="fdC" id="fd_motion_amp" value="0.04" step="0.01" min="0" max="0.12" style="width:70px;margin-left:10px" onchange="saveFdCfg()"> 幅度</div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">掐头 / 去尾</div><div class="d">开头结尾随机裁掉一小段，破坏首尾帧指纹+时长 · 建议头 0.3~1.2s、尾 0~1s</div></div>
             <span style="font-size:12px;color:var(--sub)">头</span><input type="number" class="fdC" id="fd_head_lo" value="0.3" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">~<input type="number" class="fdC" id="fd_head_hi" value="1.2" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub);margin-left:8px">尾</span><input type="number" class="fdC" id="fd_tail_lo" value="0" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">~<input type="number" class="fdC" id="fd_tail_hi" value="1.0" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()"> 秒</div>
@@ -839,7 +842,7 @@
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴几张 / 大小 / 不透明度</div></div>
             <input type="number" class="fdC" id="fd_stk_count" value="2" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
             <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="0.6" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="0.8" style="width:64px" onchange="saveFdCfg()">
-            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.02" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.03" style="width:64px" onchange="saveFdCfg()"></div>
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.9" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="1.0" style="width:64px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
@@ -1844,7 +1847,7 @@ function updateFdMatCount(){
 }
 const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band_h_lo','fd_band_h_hi','fd_band_op_lo','fd_band_op_hi','fd_bT_enable','fd_bT_folder','fd_bB_enable','fd_bB_folder',
   'fd_spd_lo','fd_spd_hi','fd_bri_lo','fd_bri_hi','fd_con_lo','fd_con_hi','fd_sat_lo','fd_sat_hi','fd_shp_lo','fd_shp_hi','fd_hue_lo','fd_hue_hi','fd_gam_lo','fd_gam_hi',
-  'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
+  'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_motion_enable','fd_motion_amp','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
   'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
   'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
   'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi'];
@@ -1872,17 +1875,18 @@ function buildFdCfg(){
     color:{ brightness:[n('fd_bri_lo',0.02),n('fd_bri_hi',0.05)], contrast:[n('fd_con_lo',1.02),n('fd_con_hi',1.06)],
       saturation:[n('fd_sat_lo',1.03),n('fd_sat_hi',1.08)], sharpen:[n('fd_shp_lo',0.3),n('fd_shp_hi',0.5)],
       hue:[n('fd_hue_lo',-6),n('fd_hue_hi',6)], gamma:[n('fd_gam_lo',0.97),n('fd_gam_hi',1.03)] },
-    speed:[n('fd_spd_lo',1.02),n('fd_spd_hi',1.04)],
+    speed:[n('fd_spd_lo',1.03),n('fd_spd_hi',1.05)],
     zoom:[n('fd_zoom_lo',1.02),n('fd_zoom_hi',1.05)],
     rotate:[n('fd_rot_lo',0.2),n('fd_rot_hi',0.6)],
-    lens:[n('fd_lens_lo',0.02),n('fd_lens_hi',0.06)],
+    lens:[n('fd_lens_lo',0.08),n('fd_lens_hi',0.10)],
     vignette:{ enable:on('fd_vig_enable'), range:[n('fd_vig_lo',0.10),n('fd_vig_hi',0.25)] },
+    motion:{ enable:on('fd_motion_enable'), amp:n('fd_motion_amp',0.04) },
     trim:{ head:[n('fd_head_lo',0.3),n('fd_head_hi',1.2)], tail:[n('fd_tail_lo',0),n('fd_tail_hi',1.0)] },
     audio:{ pitch:[n('fd_pit_lo',0.97),n('fd_pit_hi',1.03)], volume:[n('fd_avol_lo',0.95),n('fd_avol_hi',1.05)], eq:on('fd_aeq') },
     fake_meta:on('fd_fakemeta'),
     mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
     stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',2),
-      scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
+      scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.9),n('fd_stk_al_hi',1.0)] },
     bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] } };
 }
 async function runFd(btn){
