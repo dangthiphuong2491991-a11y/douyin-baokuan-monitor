@@ -2679,7 +2679,7 @@ function chBody(){
     even_multiday:document.getElementById('chEvenMultiday').checked,
     ch_statement:_v('chStatement'), ch_at:_v('chAt'), ch_at_pos:_v('chAtPos')||'tail',
     ch_location:_v('chLocation'), ch_collection:_v('chCollection'),
-    ch_drama:(_v('chDramaExport')||_v('chDrama')), ch_activity:_v('chActivity')};
+    ch_drama:(_v('chDramaExport')||_v('chDrama')), ch_drama_title:_v('chDrama'), ch_activity:_v('chActivity')};
 }
 function _v(id){ const e=document.getElementById(id); return e?e.value.trim():''; }
 let chListsTimer=null;

@@ -855,7 +855,7 @@ async def _find_file_input(page):
 async def upload(state_file: Path, video_path: str, title: str = "", tags=None, desc: str = "",
                  cover_path: str = "", original: bool = False, schedule=None, link: str = "",
                  statement: str = "", location: str = "", collection: str = "",
-                 drama: str = "", activity: str = "",
+                 drama: str = "", drama_title: str = "", activity: str = "",
                  headless: bool = False, show_browser: bool = False,
                  on_status=None, err_dir: Path = None):
     """上传一条视频到视频号。schedule=datetime|None。返回 (ok:bool, msg:str)。
@@ -926,7 +926,7 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             # 【剧集·仿小V猫】不点视频号弹窗，而是拦截 post_create 把 component 注入进去
             if drama:
                 st("关联视频号剧集…")
-                await _setup_drama_injection(page, drama, st, err_dir, sig)
+                await _setup_drama_injection(page, drama, st, err_dir, sig, drama_title)
 
             st("找上传入口")
             fi = await _find_file_input(page)
@@ -1373,7 +1373,7 @@ async def _try_collection(page, collection: str):
         pass
 
 
-async def _setup_drama_injection(page, drama: str, st, err_dir=None, sig=None):
+async def _setup_drama_injection(page, drama: str, st, err_dir=None, sig=None, drama_title=""):
     """【仿小V猫】关联视频号剧集 = 拿到剧集 exportId，拦截 /post/post_create 请求，
     把 objectDesc.component = {id:exportId, type:8, title:剧名} 注入进去。
     完全不点视频号那个不可靠的剧集弹窗。drama 传剧名(自动查exportId)或直接传exportId。"""
@@ -1421,6 +1421,8 @@ async def _setup_drama_injection(page, drama: str, st, err_dir=None, sig=None):
         st(f"没找到剧集「{drama}」，跳过挂剧继续发布")
         _dbg({"step": "解析失败·跳过挂剧", "drama": drama})
         return
+    if drama_title:
+        title = drama_title       # 前端带了真实剧名 → component.title 用剧名(而非 exportId 那串字符)
     st(f"剧集「{title}」将随发布注入")
     comp = {"id": export_id, "type": 8, "title": title}
 

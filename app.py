@@ -2159,7 +2159,8 @@ class UploadBody(BaseModel):
     ch_at_pos: str = "tail"          # @追加到简介位置：tail末尾 / head开头
     ch_location: str = ""            # 地理位置
     ch_collection: str = ""          # 添加到合集
-    ch_drama: str = ""               # 扩展链接·视频号剧集
+    ch_drama: str = ""               # 扩展链接·视频号剧集(exportId 或剧名)
+    ch_drama_title: str = ""         # 剧集显示名(前端一起带,注入 component 的 title 用真剧名而非 exportId)
     ch_activity: str = ""            # 活动
 
 
@@ -2319,6 +2320,7 @@ def api_channels_upload(body: UploadBody):
                              "cover_path": it.cover_path, "link": it.link, "original": it.original,
                              "statement": body.ch_statement, "location": body.ch_location,
                              "collection": body.ch_collection, "drama": body.ch_drama,
+                             "drama_title": body.ch_drama_title,
                              "activity": body.ch_activity,
                              "schedule": sched_str,
                              "publish_at": at.timestamp() if body.time_mode == "local" else 0,
@@ -2613,7 +2615,8 @@ async def _acct_upload_worker(aid: str):
                         desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
                         link=t.get("link", ""), statement=t.get("statement", ""),
                         location=t.get("location", ""), collection=t.get("collection", ""),
-                        drama=t.get("drama", ""), activity=t.get("activity", ""),
+                        drama=t.get("drama", ""), drama_title=t.get("drama_title", ""),
+                        activity=t.get("activity", ""),
                         schedule=sched, headless=False, err_dir=DATA,
                         show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
                         on_status=lambda m: t.update(stage=m))
