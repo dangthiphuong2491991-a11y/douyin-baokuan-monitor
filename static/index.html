@@ -2934,16 +2934,20 @@ function chShuffleNow(){
 }
 /* ===== 选择账号 弹窗 ===== */
 let accDlgSel=new Set();
-function openAccDlg(){ accDlgSel=new Set(chAccSel); document.getElementById('accDlg').style.display='flex'; renderAccDlg(); }
+async function openAccDlg(){
+  try{ const d=await api('/api/channels/accounts'); if(d&&d.accounts) renderAccounts(d.accounts); }catch(e){}   // 打开即刷新在线状态,避免旧状态把在线号当离线
+  accDlgSel=new Set(chAccSel); document.getElementById('accDlg').style.display='flex'; renderAccDlg();
+}
 function closeAccDlg(){ document.getElementById('accDlg').style.display='none'; }
 function accDlgToggle(id){ if(accDlgSel.has(id)) accDlgSel.delete(id); else accDlgSel.add(id); renderAccDlg(); }
 function accDlgAll(ids){ const all=ids.every(i=>accDlgSel.has(i)); ids.forEach(i=>all?accDlgSel.delete(i):accDlgSel.add(i)); renderAccDlg(); }
 function confirmAccDlg(){
   chAccSel.clear();
-  let skipped=0;
-  [...accDlgSel].forEach(id=>{ const a=chAccounts.find(x=>x.id===id); if(a&&a.online) chAccSel.add(id); else if(a) skipped++; });
+  let off=0;
+  // 离线也能选上(不再静默跳过);真离线的话发布时 worker 会明确报"该账号未登录"
+  [...accDlgSel].forEach(id=>{ const a=chAccounts.find(x=>x.id===id); if(a){ chAccSel.add(id); if(!a.online) off++; } });
   closeAccDlg(); renderAccPick(); chPreview();
-  if(skipped) toast(skipped+' 个离线账号已跳过（需先重新扫码登录）');
+  if(off) toast(off+' 个号显示离线，已帮你选上；若发布失败请去「账号管理」重新登录');
 }
 function renderAccDlg(){
   const q=(document.getElementById('accDlgSearch').value||'').trim().toLowerCase();
