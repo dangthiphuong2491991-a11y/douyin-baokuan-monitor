@@ -6,8 +6,52 @@ import asyncio
 import json
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+
+# ============ Win32：把后台发布窗口"藏到屏幕右下角只露1px" ============
+# 【2026-07-13 实测根治发布慢】窗口放屏幕外(-32000)会被 Chromium 判定为"不可见"→重度节流
+# 渲染/合成→视频号页面的分块上传爬行→193MB要221秒(离屏)vs 60秒(贴角)vs 小V猫54秒。
+# 解法:窗口留在屏幕内(只露右下角1px,用户几乎看不到)→Chromium 认为在渲染→不节流→上传快。
+# 透明化(alpha0)不行(仍被判不可见还是慢);无头 create 页会被重定向。贴角是唯一又快又隐形的解。
+def _screen_size():
+    try:
+        u = __import__("ctypes").windll.user32
+        return u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+    except Exception:
+        return 1920, 1080
+
+
+def _hide_window_taskbar(pid: int):
+    """把该进程的可见窗口从任务栏隐藏(WS_EX_TOOLWINDOW),用户不会在任务栏看到发布浏览器。
+    窗口本身仍在屏幕右下角露1px(保持'可见'不被节流)。"""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        GWL_EXSTYLE = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        hwnds = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def _cb(hwnd, lp):
+            wpid = wintypes.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+            if wpid.value == pid and u.IsWindowVisible(hwnd) and u.GetWindowTextLengthW(hwnd) > 0:
+                hwnds.append(hwnd)
+            return True
+        u.EnumWindows(_cb, 0)
+        for hwnd in hwnds:
+            ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            u.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW)
+        return len(hwnds)
+    except Exception:
+        return 0
+
 
 def _free_port() -> int:
     """让系统分配一个真正空闲的端口(bind 到 0 拿端口),避免自增计数在并发/负载下撞端口。"""
@@ -111,7 +155,13 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
         # 而是自己启动一个"干净"的 bundled Chromium(无 --enable-automation、navigator.webdriver=false)，
         # 再用 CDP 从外部连接驱动 —— 和小V猫的内嵌 webview 一样是"正常浏览器"，不被检测。
         exe = p.chromium.executable_path
-        posarg = "--window-position=120,60" if visible else "--window-position=-32000,-32000"
+        # 【关键】后台模式不再用 -32000 离屏(会被 Chromium 当"不可见"节流→上传慢7倍),
+        # 改成贴屏幕右下角、只露1px(用户几乎看不到,但 Chromium 认为在渲染→不节流→上传快)。
+        if visible:
+            posarg = "--window-position=120,60"
+        else:
+            _sw, _sh = _screen_size()
+            posarg = f"--window-position={_sw - 1},{_sh - 1}"
         browser = None
         last_err = None
         for _try in range(3):     # 启动重试:机器有负载时端口可能起得慢/撞,换端口重来
@@ -145,6 +195,13 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
             await asyncio.sleep(1)
         if browser is None:
             raise last_err or RuntimeError("浏览器启动失败(重试3次)")
+        # 后台模式:窗口已在右下角只露1px,再把它从任务栏隐藏(用户彻底无感)。稍等窗口建好再隐。
+        if not visible and proc:
+            try:
+                await asyncio.sleep(0.8)
+                _hide_window_taskbar(proc.pid)
+            except Exception:
+                pass
         ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
         # 【关键】自启动浏览器用 proc.terminate() 硬杀，chromium 来不及把 cookie flush 进档案 →
         # 档案里的登录态是旧的。所以**每次都从 JSON 快照播种最新 cookie**(快照在每次关闭前都存过=活的)。
@@ -849,7 +906,13 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
                         sig["create_ok"] = (resp.status == 200)
             except Exception:
                 pass
-        page.on("response", lambda r: asyncio.create_task(_on_resp(r)))
+        # 【2026-07-13减CDP负载】上传时有几百个分块响应,原来对每个都 create_task 刷爆CDP通道。
+        # 只对我们关心的两个信号URL建任务,其余同步跳过——大幅降低上传期间的CDP往返。
+        def _resp_router(r):
+            u = getattr(r, "url", "") or ""
+            if "post_clip_video_result" in u or "/post/post_create" in u:
+                asyncio.create_task(_on_resp(r))
+        page.on("response", _resp_router)
         try:
             await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=40000)
             await page.wait_for_timeout(2000)
@@ -863,7 +926,7 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             # 【剧集·仿小V猫】不点视频号弹窗，而是拦截 post_create 把 component 注入进去
             if drama:
                 st("关联视频号剧集…")
-                await _setup_drama_injection(page, drama, st)
+                await _setup_drama_injection(page, drama, st, err_dir, sig)
 
             st("找上传入口")
             fi = await _find_file_input(page)
@@ -879,32 +942,42 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
 
             st("上传视频文件…")
             if not await _set_file_via_cdp(page, video_path):   # CDP塞路径(大文件不受50MB限制)
-                await fi.set_input_files(str(video_path))         # 兜底
+                await fi.set_input_files(str(video_path))         # 兜底(仅<50MB可用)
 
             # 【仿小V猫·可靠信号】等 post_clip_video_result 响应 = 视频真正传到CDN+登记完成。
-            # (不靠 DOM 猜。245MB约2-3分钟,给8分钟上限。期间关掉冒出的验证弹窗(不reload)。
-            #  若上传区始终空=视频没进去,补塞一次。)
-            st("上传视频到CDN(约2-3分钟)…")
-            last_reset = 0
+            # 【2026-07-13根治"发布慢/卡死"】绝不中途重塞文件!原来每30秒查"删除"按钮判断
+            # 视频有没有进去,但发布页是 iframe、_dall()不穿透iframe→永远查不到→每30秒重塞
+            # 一次→150MB上传刚传到一半就被打断从头重启→永远传不完(实测单次塞56秒就好，
+            # =小V猫速度)。塞一次就够,只等信号。期间只关验证弹窗(不reload、不重塞)。
+            st("上传视频到CDN(约1分钟)…")
             for _w in range(240):
                 if sig["clip_ready"]:
                     st("视频已上传完成(CDN登记成功)")
                     break
                 await asyncio.sleep(2)
-                await _handle_verify_if_any(page, st)      # 弹验证就关(不reload,不丢视频)
-                # 每30秒检查一次:上传区若还空(视频没进去),补塞
-                if _w - last_reset >= 15:
-                    last_reset = _w
-                    try:
-                        has_del = await page.evaluate("()=>{" + _DEEP_JS +
-                            "return _dall().some(e=>(e.innerText||'').trim()==='删除');}")
-                    except Exception:
-                        has_del = True
-                    if not has_del:
-                        await _set_file_via_cdp(page, video_path)
+                # 【2026-07-13】上传等待期不再跑验证检测——实测 _verify_block_msg 在干净页面误报,
+                # 其 Escape/点蒙层动作反而干扰上传/取消发表。真需验证的账号会在发表阶段连续失败退回。
             if not sig["clip_ready"]:
                 await browser.close()
                 return False, "视频上传超时(>8分钟未收到CDN登记完成)"
+
+            # 【2026-07-13根治发表慢】视频号服务端处理视频期间「发表」按钮 disabled,这期间**绝不填表单、
+            # 不碰页面**——往 wujie 编辑器打字等操作会抢渲染进程、干扰服务端处理→按钮几百秒才启用。
+            # 先安静轻量等按钮启用(处理完),再填表单再发表。实测裸等60秒就绪 vs 边填边等500秒。
+            st("等视频号处理视频…")
+            import time as _tt
+            _dl0 = _tt.time() + 480
+            while _tt.time() < _dl0 and not sig["create_done"]:
+                try:
+                    _en = await page.evaluate("()=>{" + _DEEP_JS +
+                        "let b=_dall().find(e=>e.tagName==='BUTTON'&&(e.innerText||'').trim()==='发表');"
+                        "if(!b) return null; return !(b.disabled||b.getAttribute('aria-disabled')==='true'||/disable/.test((b.className||'')));}")
+                except Exception:
+                    _en = None
+                if _en:
+                    st(f"视频处理完成(等了{int(_tt.time()-(_dl0-480))}秒),开始填内容")
+                    break
+                await asyncio.sleep(3)
 
             st("填标题/话题/简介")
             # 内容编辑器：小V猫源码确认现版为 .text-editor-content，旧版 div.input-editor 兜底
@@ -987,12 +1060,15 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             import time as _t
             deadline = _t.time() + 480      # 最多等8分钟(视频号处理大视频/高峰期可能久,留足余量)
             waited_disabled = 0
+            click_tries = 0
             while _t.time() < deadline:
                 if sig["create_done"]:
                     break
-                await _close_drama_modal(page)          # 关掉可能挡住的弹窗蒙版
-                await _handle_verify_if_any(page, st)   # 关掉验证弹窗(不reload)
-                # 查发表按钮：是否存在 + 是否 disabled(视频号处理中会禁用)
+                # 【2026-07-13根治发表卡死】等按钮时**绝不跑重扫描**！_handle_verify_if_any/_close_drama_modal
+                # 内部要遍历全页所有元素+getComputedStyle(极重),每轮跑会抢占渲染进程→拖垮正在收尾的上传
+                # →按钮永远不亮(post_clip_video_result是早信号,真上传还没完)。诊断不跑这些=60秒好。
+                # 正解:等待时只做**轻量**查按钮;重扫描(关弹窗/验证)每30秒才做一次;按钮亮了(上传已完成
+                # 不怕干扰)点击前再关一次。
                 try:
                     bs = await page.evaluate("()=>{" + _DEEP_JS + r"""
                         let b=_dall().find(e=>e.tagName==='BUTTON'&&(e.innerText||'').trim()==='发表');
@@ -1008,17 +1084,24 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
                 if not bs.get("found"):
                     await asyncio.sleep(2)
                     continue
-                if bs.get("disabled") and waited_disabled < 30:
-                    # 按钮仍禁用=视频号还在处理视频，等它启用(每15秒报一次进度)。
-                    # 但最多只等90秒(30×3s)——万一 disabled 判定误报，超时后照样尝试点(交给Playwright actionability仲裁)
+                if bs.get("disabled"):
+                    # 按钮禁用=视频还没传完，**绝不点它**(点禁用按钮会干扰上传)。安静等它启用。
                     waited_disabled += 1
                     if waited_disabled % 5 == 1:
                         st(f"视频号处理视频中，等发表按钮就绪…(已等{int(_t.time()-(deadline-480))}秒)")
+                    # 只有每30秒(10×3s)才关一次剧集/合集蒙版(不跑验证检测,避免误报干扰)
+                    if waited_disabled % 10 == 0:
+                        await _close_drama_modal(page)
                     await asyncio.sleep(3)
                     continue
                 if waited_disabled:
                     st(f"发表按钮已就绪(等了{int(_t.time()-(deadline-480))}秒)，点击发表…")
                     waited_disabled = 0
+                # 按钮已启用=上传真完成。只关剧集/合集蒙版(它会挡按钮)。
+                # 【2026-07-13根治发表死循环】这里**不再跑验证检测**——实测干净页面(发表按钮亮着、
+                # 无弹窗)_handle_verify_if_any 会误报"验证弹窗",它的 Escape/点蒙层反而把发表取消掉→
+                # "检测到验证弹窗→已关闭→再检测"死循环8分钟后失败(截图+CDP实测页面根本没验证弹窗)。
+                await _close_drama_modal(page)
                 # —— 按钮已启用 → 真实可信点击(Playwright locator 穿透 open shadow，isTrusted=true) ——
                 clicked = False
                 try:
@@ -1064,6 +1147,54 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
                     await asyncio.sleep(1)
                     if sig["create_done"]:
                         break
+                # 【实名验证秒判·2026-07-13】点了发表没回执→只读深扫描查"实名验证"二维码弹窗
+                # (反复发同一条视频触发风控,蒙版盖住发表按钮=此前 maskOver:True 的真身)。
+                # 只匹配弹窗专属文案的叶子节点,不点/不关/不Escape,零误伤。
+                if not sig["create_done"]:
+                    try:
+                        vhit = await page.evaluate("()=>{" + _DEEP_JS + r"""
+                            return _dall().some(e=>{ if(e.childElementCount>0) return false;
+                                const t=(e.textContent||'');
+                                return t.includes('实名验证')||t.includes('实名信息核验'); });
+                        }""")
+                    except Exception:
+                        vhit = False
+                    if vhit:
+                        scanned = False
+                        if show_browser:
+                            # 窗口可见：给用户3分钟扫码,扫完弹窗消失→继续点发表(不丢这次上传)
+                            st("⚠ 弹出实名验证二维码，请用管理员微信扫码…(最多等3分钟)")
+                            for _w in range(60):
+                                await asyncio.sleep(3)
+                                try:
+                                    still = await page.evaluate("()=>{" + _DEEP_JS + r"""
+                                        return _dall().some(e=>{ if(e.childElementCount>0) return false;
+                                            const t=(e.textContent||'');
+                                            return t.includes('实名验证')||t.includes('实名信息核验'); });
+                                    }""")
+                                except Exception:
+                                    still = True
+                                if not still:
+                                    st("✅ 实名验证完成，继续发表…")
+                                    scanned = True
+                                    click_tries = 0          # 验证通过,重新给满点击机会
+                                    break
+                        if scanned:
+                            continue                           # 扫完了→回到循环顶继续点发表
+                        if err_dir:
+                            try:
+                                await page.screenshot(path=str(Path(err_dir) / "channels_publish_fail.png"))
+                            except Exception:
+                                pass
+                        await browser.close()
+                        return False, ("视频号要求实名验证：反复发同一条视频触发风控。"
+                                       "请在软件设置里打开「显示浏览器」后重发一条，弹出二维码用管理员微信扫码；"
+                                       "验证通过后即可正常发表。本条不自动重试(重试重传会继续刷风控)")
+                # 【防死循环】点了发表却没回执就再点,但最多点5次(~50秒)就退出判失败,不再死等8分钟。
+                # 交给上层自动重试(整条重来往往就好;真需验证的账号会连续失败,不浪费时间)。
+                click_tries += 1
+                if not sig["create_done"] and click_tries >= 5:
+                    break
             # 用 post_create 响应判定成败
             if sig["create_done"]:
                 if sig["create_ok"]:
@@ -1242,36 +1373,53 @@ async def _try_collection(page, collection: str):
         pass
 
 
-async def _setup_drama_injection(page, drama: str, st):
+async def _setup_drama_injection(page, drama: str, st, err_dir=None, sig=None):
     """【仿小V猫】关联视频号剧集 = 拿到剧集 exportId，拦截 /post/post_create 请求，
     把 objectDesc.component = {id:exportId, type:8, title:剧名} 注入进去。
     完全不点视频号那个不可靠的剧集弹窗。drama 传剧名(自动查exportId)或直接传exportId。"""
     if not drama:
         return
+
+    def _dbg(info):
+        if not err_dir:
+            return
+        try:
+            (Path(err_dir) / "drama_inject_debug.json").write_text(
+                json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    is_id = drama.startswith("event/") or drama.startswith("UzF") or len(drama) > 60
+    _dbg({"step": "进入", "drama": drama, "当作exportId": is_id})
     export_id, title = "", drama
-    if drama.startswith("event/") or drama.startswith("UzF") or len(drama) > 60:
+    if is_id:
         export_id = drama
     else:
         try:
             res = await page.evaluate("""async (name)=>{
                 const url='/cgi-bin/mmfinderassistant-bin/post/search_drama_component';
+                let seen=[];
                 for(let cp=1; cp<=80; cp++){
                     const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},
                         body:JSON.stringify({currentPage:cp,pageSize:5,sceneType:3,scene:7,reqScene:7,
                             rawKeyBuff:'',pluginSessionId:null,timestamp:String(Date.now())}),credentials:'include'});
                     const j=await r.json(); const d=(j&&j.data)||{}; const lst=d.list||[];
-                    for(const it of lst){ if((it.name||'')===name) return {id:it.id,name:it.name}; }
-                    for(const it of lst){ if((it.name||'').includes(name)) return {id:it.id,name:it.name}; }
+                    for(const it of lst){ seen.push(it.name||''); }
+                    for(const it of lst){ if((it.name||'')===name) return {id:it.id,name:it.name,seen}; }
+                    for(const it of lst){ if((it.name||'').includes(name)) return {id:it.id,name:it.name,seen}; }
                     if(lst.length<5) break;
                 }
-                return null;
+                return {id:'',name:'',seen};
             }""", drama)
             if res:
-                export_id, title = res.get("id", ""), res.get("name", drama)
-        except Exception:
-            pass
+                export_id, title = res.get("id", "") or "", res.get("name", drama) or drama
+                _dbg({"step": "按名解析", "drama": drama, "找到exportId": export_id[:30],
+                      "接口返回的剧名": (res.get("seen") or [])[:30]})
+        except Exception as e:
+            _dbg({"step": "按名解析异常", "drama": drama, "err": str(e)[:120]})
     if not export_id:
         st(f"没找到剧集「{drama}」，跳过挂剧继续发布")
+        _dbg({"step": "解析失败·跳过挂剧", "drama": drama})
         return
     st(f"剧集「{title}」将随发布注入")
     comp = {"id": export_id, "type": 8, "title": title}
@@ -1282,16 +1430,54 @@ async def _setup_drama_injection(page, drama: str, st):
             if body:
                 data = json.loads(body)
                 od = data.get("objectDesc")
+                od_was_str = False
+                if isinstance(od, str):        # objectDesc 有时被序列化成字符串
+                    try:
+                        od = json.loads(od); od_was_str = True
+                    except Exception:
+                        od = None
                 if isinstance(od, dict):
                     od["component"] = comp
-                    await route.continue_(post_data=json.dumps(data, ensure_ascii=False))
+                    data["objectDesc"] = json.dumps(od, ensure_ascii=False) if od_was_str else od
+                    new_body = json.dumps(data, ensure_ascii=False)
+                    # 【发表提速根因·2026-07-13】route 拦截 post_create 后，page.on(response) 抓不到
+                    # 本请求的响应 → create_done 永远 False → 傻等5次点击+按钮等待磨几分钟(视频其实早发出去了)。
+                    # 改用 route.fetch 直接发请求拿响应，当场读发布结果设成功信号，再 fulfill 回填页面。
+                    try:
+                        resp = await route.fetch(post_data=new_body)
+                        ok, ec, msg = False, -1, ""
+                        try:
+                            j = await resp.json()
+                            ec = j.get("errCode", j.get("errcode", -1))
+                            ok = (ec == 0)
+                            msg = j.get("errMsg") or j.get("errmsg") or ""
+                        except Exception:
+                            ok = (resp.status == 200)
+                        if sig is not None:
+                            sig["create_done"] = True
+                            sig["create_ok"] = ok
+                            sig["create_msg"] = msg
+                        _dbg({"fired": True, "injected": True, "errCode": ec, "create_ok": ok, "comp": comp})
+                        await route.fulfill(response=resp)
+                    except Exception as _fe:
+                        # fetch/fulfill 失败 → 回落普通转发(至少视频照常发出去)
+                        _dbg({"fired": True, "injected": True, "fetch回落": str(_fe)[:100]})
+                        await route.continue_(post_data=new_body)
                     return
-        except Exception:
-            pass
+                _dbg({"fired": True, "injected": False,
+                      "note": "post_create 里没有 objectDesc(dict)",
+                      "top_keys": list(data.keys()),
+                      "objectDesc_type": type(data.get("objectDesc")).__name__})
+            else:
+                _dbg({"fired": True, "injected": False, "note": "post_create 无 post_data"})
+        except Exception as e:
+            _dbg({"fired": True, "injected": False, "note": "route异常:" + str(e)[:120]})
         try:
             await route.continue_()
         except Exception:
             pass
+
+    _dbg({"fired": False, "injected": False, "note": "拦截器已注册,等 post_create", "comp": comp})
     try:
         await page.route("**/post/post_create*", _route)
     except Exception:

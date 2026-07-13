@@ -13,3 +13,11 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# 依赖 / 运行日志 / 本次会话临时测试文件（补充）
+node_modules/
+logs/
+*.log.out
+_pub_ep*.py
+_c1.mp4
+_*.png

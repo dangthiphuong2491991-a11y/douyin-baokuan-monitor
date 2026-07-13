@@ -57,6 +57,24 @@ def _natkey(p):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", n)]
 
 
+def _ep_num_of(p):
+    """从文件名提取集号(第X集 / 开头数字 / 任意数字)；取不到返回 0。"""
+    b = os.path.splitext(os.path.basename(p))[0]
+    m = re.search(r"第\s*(\d+)\s*集", b) or re.match(r"(\d+)", b) or re.search(r"(\d+)", b)
+    return int(m.group(1)) if m else 0
+
+
+def _depad_path(path):
+    """补零成品名 → 旧的不补零名(第01集→第1集, 第01-02集→第1-2集)。
+    用于续跑时识别旧导出：旧成品已渲染好就直接改名迁移，绝不重渲染留下重复文件。"""
+    d, b = os.path.split(path)
+    b2 = re.sub(r"第0*(\d+)(?:-0*(\d+))?集",
+                lambda m: (f"第{int(m.group(1))}-{int(m.group(2))}集"
+                           if m.group(2) else f"第{int(m.group(1))}集"),
+                b)
+    return os.path.join(d, b2)
+
+
 def _rr(pair, dflt):
     """[lo,hi] 里随机取一个；单值直接用；空=默认。"""
     if pair is None or pair == "":
@@ -97,9 +115,9 @@ def _probe_dur(path):
     return 0.0
 
 
-def _mix_name(chunk, prefix, start_ep=None):
-    """成品名 = 合集名_第X-Y集。文件名带数字按数字取;不带数字按顺序位置(start_ep起)兜底,
-    保证成品永远是"第X-Y集"命名,发布时可按集数排序。"""
+def _mix_name(chunk, prefix, start_ep=None, pad=2):
+    """成品名 = 合集名_第XX-YY集(集号补零到 pad 位)。文件名带数字按数字取;不带数字按顺序位置(start_ep起)兜底。
+    补零(第01集/第002集)让文件名在 Explorer/后端/发布里都天然按集数升序;发布默认短标题会去零显示成"第X集"。"""
     coll = ""
     try:
         coll = os.path.basename(os.path.dirname(chunk[0]))
@@ -116,7 +134,8 @@ def _mix_name(chunk, prefix, start_ep=None):
         nums = list(range(start_ep, start_ep + len(chunk)))   # 文件名没数字→按集数顺序位置
     if nums:
         nums = sorted(set(nums))
-        rng = f"{nums[0]}-{nums[-1]}" if len(nums) > 1 else f"{nums[0]}"
+        w = max(1, int(pad))
+        rng = f"{nums[0]:0{w}d}-{nums[-1]:0{w}d}" if len(nums) > 1 else f"{nums[0]:0{w}d}"
         safe = re.sub(r'[\\/:*?"<>|]', "", coll)[:40] or prefix
         return f"{safe}_第{rng}集"
     return prefix
@@ -435,7 +454,7 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None):
 
 def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
                 on_status=None, on_task=None, concurrency=2, skip_existing=False,
-                variants=1):
+                variants=1, stop_flag=None):
     """把选中的集数**按合集(素材所在文件夹)分组**，每合集每 per 集去重合成一个成品，
     输出到 out_dir/合集名/。concurrency 条成品同时渲染(默认2)。返回成品路径列表。
     on_task(rec) 每条成品生命周期回调(running/done/failed+原因+用时)，供任务记录。
@@ -477,9 +496,11 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
         chunks = [pool[i:i + per] for i in range(0, len(pool), per)]
         if count and count > 0:
             chunks = chunks[:count]
+        # 补零位数：按本合集最大集号(第01集/第002集)，让成品文件名天然按集数升序
+        pad = max(2, len(str(max([_ep_num_of(p) for p in pool] + [len(pool)]))))
         nv = max(1, int(variants or 1))
         for i, chunk in enumerate(chunks):
-            base = _mix_name(chunk, f"{prefix}_{i+1}", i * per + 1)
+            base = _mix_name(chunk, f"{prefix}_{i+1}", i * per + 1, pad)
             for v in range(nv):
                 # 变体：同一成品渲染N个不同随机参数的版本(多账号各发一个,指纹互不相同)
                 name = base if v == 0 else f"{base}_变体{v+1}"
@@ -502,12 +523,28 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
                 on_task({"name": name, "coll": safe, "eps": len(chunk),
                          "out": out, "status": status, "err": err,
                          "size_mb": size_mb, "elapsed": elapsed, "dur": dur, "fp": fp})
+        # 【停止】用户点了停止 → 还没开始的这条直接标取消,不再渲染
+        if stop_flag and stop_flag():
+            _emit("cancelled", err="用户已停止")
+            return
         # 重启续跑：已经渲染完的成品(>1MB)直接算完成，只补没完成的
         if skip_existing:
             try:
                 if os.path.exists(out) and os.path.getsize(out) > 1024 * 1024:
                     _emit("done", size_mb=round(os.path.getsize(out) / 1048576, 1),
                           elapsed="已存在·跳过", dur=_fmt_dur(_probe_dur(out)))
+                    with lock:
+                        made.append(out)
+                        done_n[0] += 1
+                        if on_status:
+                            on_status(f"渲染中 {done_n[0]}/{total}（并发 {concurrency}）")
+                    return
+                # 补零改名前旧成品(第1集.mp4)已渲染好 → 直接改名迁移成补零名，绝不重渲染(防重复文件)
+                old = _depad_path(out)
+                if old != out and os.path.exists(old) and os.path.getsize(old) > 1024 * 1024:
+                    os.replace(old, out)
+                    _emit("done", size_mb=round(os.path.getsize(out) / 1048576, 1),
+                          elapsed="旧成品·改名", dur=_fmt_dur(_probe_dur(out)))
                     with lock:
                         made.append(out)
                         done_n[0] += 1
@@ -533,7 +570,11 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
             with lock:
                 made.append(out)
         except Exception as e:
-            _emit("failed", err=str(e)[:160])
+            # 用户停止时 ffmpeg 被杀→渲染报错,这条标"取消"而非"失败"
+            if stop_flag and stop_flag():
+                _emit("cancelled", err="用户已停止")
+            else:
+                _emit("failed", err=str(e)[:160])
         with lock:
             done_n[0] += 1
             if on_status:

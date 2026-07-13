@@ -1,0 +1,12 @@
+{
+  "name": "baokuan-monitor",
+  "version": "1.0.14",
+  "description": "爆款监控 Electron 外壳（内嵌视频号后台）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^32.2.0"
+  }
+}

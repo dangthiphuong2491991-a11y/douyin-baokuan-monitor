@@ -263,7 +263,13 @@
         </div>
 
         <h2 class="hero">监控你关注的<span class="g">爆款博主</span></h2>
-        <div class="lead">博主一发新作品，立刻弹窗提醒；在「更新动态」里可直接播放或手动下载。</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div class="lead" style="margin:0">博主一发新作品，立刻弹窗提醒；在「更新动态」里可直接播放或手动下载。</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub);cursor:pointer;white-space:nowrap" title="关掉后博主更新/起飞预警/合集追更都不再弹窗提醒">
+            <span>🔔 弹窗提醒</span>
+            <span class="switch"><input type="checkbox" id="notifySwitch" checked onchange="toggleGlobalNotify(this.checked)"><span class="slider"></span></span>
+          </label>
+        </div>
         <div class="stats">
           <div class="stat card"><div class="k">监控博主</div><div class="v g" id="stBloggers">0</div></div>
           <div class="stat card"><div class="k">累计发现更新</div><div class="v" id="stUpdates">0</div></div>
@@ -302,7 +308,7 @@
             <textarea id="seedInput" rows="3" placeholder="每行一条种子视频链接/分享口令，例如：&#10;https://v.douyin.com/xxxxx/&#10;（种子决定题材：贴历史讲解就挖历史爆款，贴美食就挖美食爆款）"
               style="width:100%;resize:vertical;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--txt);font:inherit;outline:none"></textarea>
           </div>
-          <div id="libHint" style="color:var(--sub);font-size:13px">扫描你「博主监控」库里的 <b id="libCount">0</b> 个博主，把<b>时间范围内</b>的作品按<b>点赞从高到低</b>排，取前 50。</div>
+          <div id="libHint" style="color:var(--sub);font-size:13px">扫描你「博主监控」库里的 <b id="libCount">0</b> 个博主，把<b>时间范围内</b>的作品按<b>点赞从高到低</b>排，取前 <b id="topNEcho">50</b>。</div>
           <div class="row" style="display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap">
             <label id="minLikeWrap" style="color:var(--sub);font-size:13px">点赞门槛 ≥
               <input type="number" id="minLike" value="20000" min="0" step="1000" placeholder="自己填"
@@ -324,6 +330,10 @@
                 <input type="number" id="hoursCustomNum" value="3" min="1" style="width:64px;margin:0 4px">
                 <select id="hoursCustomUnit" style="padding:11px 8px"><option value="24">天</option><option value="1">小时</option></select>
               </span>
+            </label>
+            <label style="color:var(--sub);font-size:13px">取前
+              <input type="number" id="discTopN" value="50" min="1" max="500" step="10" title="按点赞从高到低，取前多少条（1~500）"
+                style="width:80px;margin:0 6px" onchange="saveDiscTopN()"> 条
             </label>
             <label id="pagesWrap" style="color:var(--sub);font-size:13px;display:none">抓取深度
               <select id="pages" style="margin-left:6px">
@@ -840,6 +850,7 @@
           <span id="fdStatus" style="color:var(--sub);margin-left:12px"></span>
           <button class="btn ghost" onclick="saveFdCfgNow(this)" style="margin-left:auto">💾 保存设置</button>
           <button class="btn" id="fdBtn" onclick="runFd(this)" style="margin-left:10px">⚡ 开始去重导出</button>
+          <button class="btn" id="fdStopBtn" onclick="stopFd(this)" style="margin-left:8px;display:none;background:var(--red);color:#fff">⏹ 停止</button>
         </div>
         <div id="fdResult" style="margin-top:14px"></div>
 
@@ -1301,6 +1312,7 @@
 <script>
 let lastCount = null, curStatus = null;
 let PLATFORM = localStorage.getItem('platform') || 'douyin';
+try{ const _tn=localStorage.getItem('discTopN'); const _e=document.getElementById('discTopN'); if(_tn&&_e){ _e.value=_tn; if(typeof saveDiscTopN==='function') saveDiscTopN(); } }catch(e){}
 
 /* 各平台的文案 */
 const PF_META = {
@@ -1350,6 +1362,14 @@ function switchPlatform(p){
   applyPlatformLabels();
   gotoHome();
   refresh();
+  restoreNotify();
+}
+async function toggleGlobalNotify(on){
+  try{ await api('/api/notify_enabled','POST',{enabled:!!on}); toast(on?'已开启弹窗提醒':'已关闭弹窗提醒，博主更新/预警都不再弹窗'); }
+  catch(e){ uiAlert(e.message); const el=document.getElementById('notifySwitch'); if(el) el.checked=!on; }
+}
+async function restoreNotify(){
+  try{ const d=await api('/api/notify_enabled'); const el=document.getElementById('notifySwitch'); if(el) el.checked=!!d.enabled; }catch(e){}
 }
 
 /* ---- 风格化对话框（替代原生 alert/confirm/prompt） ---- */
@@ -1862,10 +1882,20 @@ async function runFd(btn){
     startFdPoll();
   }catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; }
 }
+async function stopFd(btn){
+  if(!await uiConfirm('确定停止去重导出？正在渲染的这条会中断（已完成的成品保留）。','停止去重')) return;
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='停止中…';
+  try{
+    await api('/api/ffdedup/stop','POST');
+    document.getElementById('fdStatus').textContent='已停止';
+  }catch(e){ uiAlert(e.message); }
+  btn.disabled=false; btn.innerHTML=old;
+}
 let fdTasks=[], fdtSel=new Set();
 function applyFdStatus(s){
   document.getElementById('fdStatus').textContent=s.status||'';
   const btn=document.getElementById('fdBtn'); if(btn){ btn.disabled=s.running; btn.textContent=s.running?'导出中…':'⚡ 开始去重导出'; }
+  const stopB=document.getElementById('fdStopBtn'); if(stopB) stopB.style.display=s.running?'inline-block':'none';
   const set=(id,t)=>{const e=document.getElementById(id); if(e) e.textContent=t;};
   set('fdRun','处理 '+(s.counts?.running||0)); set('fdOk','成功 '+(s.counts?.done||0)); set('fdFail','失败 '+(s.counts?.failed||0));
   fdTasks=s.tasks||[]; renderFdTasks();
@@ -2370,20 +2400,30 @@ async function xvPickDir(){
 }
 // 默认标题/话题模板（每条视频卡可单独改，批量操作可统一改）
 const XV_DEF_TITLE='点击❤左下角【免费剧集】，不花一分钱看全集';
+// 默认短标题：去扩展名 + 把补零的集号还原成自然写法（第01集→第1集，第01-02集→第1-2集）
+function xvTitleFromName(name){
+  return (name||'').replace(/\.[^.]+$/,'')
+    .replace(/第0*(\d+)(?:-0*(\d+))?集/g,(m,a,b)=> b?`第${+a}-${+b}集`:`第${+a}集`)
+    .slice(0,30);
+}
 const XV_DEF_TAGS=['热门漫剧','这个结局太爽了','影视综艺','免费漫剧'];
 function xvEpNum(name){ // 从文件名提取集数："xx_第3-4集"→3、"7.mp4"→7,没有数字排最后
   const m=name.match(/第\s*(\d+)/)||name.match(/^(\d+)/)||name.match(/(\d+)/);
   return m?parseInt(m[1]):1e9;
 }
-function xvAddPaths(paths){
-  (paths||[]).forEach(p=>{ const name=p.split(/[\\/]/).pop();
-    if(!chPick.find(x=>x.path===p)) chPick.push({path:p,name,title:XV_DEF_TITLE}); });
-  // 按(剧文件夹, 集数)自然排序：第1-2集永远排最前，发布顺序=列表顺序
+// 按(剧文件夹, 集数)自然排序 chPick：第1集永远排最前，发布顺序=列表顺序。
+// 放在这里统一排 → 无论走「添加视频」还是网格勾选/拖拽/恢复,列表都按集数升序。
+function xvSortPicks(){
   chPick.sort((a,b)=>{
-    const fa=a.path.split(/[\\/]/).slice(-2,-1)[0]||'', fb=b.path.split(/[\\/]/).slice(-2,-1)[0]||'';
+    const fa=(a.path||'').split(/[\\/]/).slice(-2,-1)[0]||'', fb=(b.path||'').split(/[\\/]/).slice(-2,-1)[0]||'';
     if(fa!==fb) return fa.localeCompare(fb,'zh');
     return xvEpNum(a.name)-xvEpNum(b.name);
   });
+}
+function xvAddPaths(paths){
+  (paths||[]).forEach(p=>{ const name=p.split(/[\\/]/).pop();
+    if(!chPick.find(x=>x.path===p)) chPick.push({path:p,name,title:XV_DEF_TITLE}); });
+  xvSortPicks();
   renderPickList(); chPreview();
 }
 
@@ -2502,18 +2542,19 @@ function toggleChFolder(key){
   vids.forEach(v=>{
     const i=chPick.findIndex(p=>p.path===v.path);
     if(allSel){ if(i>=0) chPick.splice(i,1); }
-    else if(i<0){ chPick.push({path:v.path, name:v.name, size:v.size, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)}); }
+    else if(i<0){ chPick.push({path:v.path, name:v.name, size:v.size, title:xvTitleFromName(v.name)}); }
   });
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function') chPreview();
 }
 function toggleChVid(v){
   const i=chPick.findIndex(p=>p.path===v.path);
   if(i>=0) chPick.splice(i,1);
-  else chPick.push({path:v.path, name:v.name, size:v.size, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)});
+  else chPick.push({path:v.path, name:v.name, size:v.size, title:xvTitleFromName(v.name)});
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview();
 }
 function coverUrl(p){ return '/api/localimg?path='+encodeURIComponent(p); }
 function renderPickList(){
+  xvSortPicks();   // 每次渲染前按集数升序：第1集永远在最前，发布顺序=列表顺序
   document.getElementById('chPickCount').textContent=chPick.length;
   document.getElementById('chUploadBtn').disabled=chPick.length===0;
   const wc=document.getElementById('xvWorkCount'); if(wc) wc.textContent=chPick.length;
@@ -2638,7 +2679,7 @@ function chBody(){
     even_multiday:document.getElementById('chEvenMultiday').checked,
     ch_statement:_v('chStatement'), ch_at:_v('chAt'), ch_at_pos:_v('chAtPos')||'tail',
     ch_location:_v('chLocation'), ch_collection:_v('chCollection'),
-    ch_drama:_v('chDrama'), ch_activity:_v('chActivity')};
+    ch_drama:(_v('chDramaExport')||_v('chDrama')), ch_activity:_v('chActivity')};
 }
 function _v(id){ const e=document.getElementById(id); return e?e.value.trim():''; }
 let chListsTimer=null;
@@ -3396,7 +3437,7 @@ async function runDiscover(btn){
       if(!n){ uiAlert('你的库里还没有博主，先去「博主监控」加几个'); return; }
       btn.disabled=true; btn.textContent='🔎 查找中…';
       grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…</div>`;
-      d=await api('/api/library_search','POST',{hours,platform:PLATFORM});
+      d=await api('/api/library_search','POST',{hours,top:getTopN(),platform:PLATFORM});
       const win=hours?`${hours}h内`:'全部';
       document.getElementById('discMeta').textContent=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，按点赞取前 ${d.count}`;
     }else{
@@ -3405,7 +3446,7 @@ async function runDiscover(btn){
       const pages=parseInt(document.getElementById('pages').value);
       btn.disabled=true; btn.textContent='🔎 挖掘中…（约1分钟）';
       grid.innerHTML='<div class="empty"><div class="big">⏳</div>正在抓取相关推荐并筛选爆款…<br>相关推荐每页间隔30秒，请稍候</div>';
-      d=await api('/api/discover','POST',{seeds,min_like,hours,pages,platform:PLATFORM});
+      d=await api('/api/discover','POST',{seeds,min_like,hours,pages,top:getTopN(),platform:PLATFORM});
       document.getElementById('discMeta').textContent=`扫描 ${d.scanned} 条，命中 ${d.count} 条（${hours}h内·赞≥${fmtN(min_like)}）`;
     }
     discItems=d.items||[];
@@ -3428,10 +3469,18 @@ function discHeadline(p,k){
   if(k==='qual') return `💬 ${p.qual||0}%`;
   return `👍 ${fmtN(p.digg)}`;
 }
+// 「取前 N」：查找时把这个数发给后端，按点赞取前 N 条（在发现页扫描卡里自定义，1~500）
+function getTopN(){ return Math.max(1, Math.min(500, parseInt(document.getElementById('discTopN')?.value)||50)); }
+function saveDiscTopN(){
+  const el=document.getElementById('discTopN'); if(!el) return;
+  let v=Math.max(1, Math.min(500, parseInt(el.value)||50)); el.value=v;
+  const echo=document.getElementById('topNEcho'); if(echo) echo.textContent=v;
+  try{ localStorage.setItem('discTopN', String(v)); }catch(e){}
+}
 function renderDisc(){
   const grid=document.getElementById('discGrid');
   const sk=document.getElementById('discSort')?.value||'digg';
-  const arr=[...discItems].sort((a,b)=>discSortVal(b,sk)-discSortVal(a,sk));
+  const arr=[...discItems].sort((a,b)=>discSortVal(b,sk)-discSortVal(a,sk));   // 后端已取前N，这里只按所选榜重排
   const hot=(k)=>k===sk?'color:var(--acc2);font-weight:700':'';   // 高亮当前排序榜的那个指标
   grid.innerHTML=arr.length? arr.map(p=>`
     <div class="post ${discSel.has(p.aweme_id)?'sel':''} ${p.downloaded?'done':''}" data-aid="${p.aweme_id}" onclick="toggleDisc('${p.aweme_id}')">
