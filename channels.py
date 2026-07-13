@@ -120,7 +120,14 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
                     "--no-first-run", "--no-default-browser-check", "--no-service-autorun",
                     "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
                     "--disable-renderer-backgrounding", "--disable-ipc-flooding-protection",
-                    "--disable-features=Translate", "--window-size=1280,900", posarg, "about:blank"]
+                    "--mute-audio",     # 浏览器级静音(预览不外放),不碰页面DOM,不影响封面生成
+                    # 【关键·上传慢/发表按钮不亮的真凶】离屏/被遮挡窗口被 Chromium"窗口遮挡节流"
+                    # 卡住:视频号的分块上传跑在渲染进程,窗口判为遮挡后合成/光栅被节流→CDN上传爬行→
+                    # 页面一直显示"文件上传中"→发表按钮永不启用。CalculateNativeWinOcclusion 关掉
+                    # 遮挡计算本身(仅 disable-backgrounding-occluded-windows 不够);小V猫用webview不受此限。
+                    "--disable-features=Translate,CalculateNativeWinOcclusion",
+                    "--disable-backgrounding-occluded-windows", "--disable-hang-monitor",
+                    "--window-size=1280,900", posarg, "about:blank"]
             proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if _wait_port(port):
                 try:
@@ -148,14 +155,10 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
                     await ctx.add_cookies(data["cookies"])
             except Exception:
                 pass
-        # 上传时静音预览视频(别外放)
-        try:
-            await ctx.add_init_script("""
-                setInterval(()=>{ try{ document.querySelectorAll('video,audio').forEach(m=>{
-                    m.muted=true; m.volume=0; if(!m.paused) m.pause(); }); }catch(_){} }, 400);
-            """)
-        except Exception:
-            pass
+        # 【2026-07-12修复"发表按钮迟迟不亮"】原来这里有个 400ms 定时暂停页面所有 video 的脚本
+        # (防预览外放)——但视频号传完视频要靠预览播放器生成封面/就绪,一直摁着暂停会把
+        # 「发表」按钮卡在禁用状态好几分钟(小V猫不动页面,几秒就绪)。
+        # 静音改用浏览器级 --mute-audio 启动参数(见 args),完全不碰页面 DOM。
     except Exception:
         try:
             if proc:
@@ -1010,9 +1013,12 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
                     # 但最多只等90秒(30×3s)——万一 disabled 判定误报，超时后照样尝试点(交给Playwright actionability仲裁)
                     waited_disabled += 1
                     if waited_disabled % 5 == 1:
-                        st("视频号处理视频中，等发表按钮就绪…")
+                        st(f"视频号处理视频中，等发表按钮就绪…(已等{int(_t.time()-(deadline-480))}秒)")
                     await asyncio.sleep(3)
                     continue
+                if waited_disabled:
+                    st(f"发表按钮已就绪(等了{int(_t.time()-(deadline-480))}秒)，点击发表…")
+                    waited_disabled = 0
                 # —— 按钮已启用 → 真实可信点击(Playwright locator 穿透 open shadow，isTrusted=true) ——
                 clicked = False
                 try:
