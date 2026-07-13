@@ -9,6 +9,14 @@ import threading
 import time
 import socket
 
+# 【关键·必须在 import app/channels(→playwright) 之前设置】打包后让 Playwright 用打进 exe 里的
+# 自带 Chromium（build.spec 已把它收进 ms-playwright/）。视频号发布引擎启动这个 chromium，
+# 不设的话 executable_path 指向系统缺失路径→用户端一发布就崩。
+if getattr(sys, "frozen", False):
+    _bp = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)), "ms-playwright")
+    if os.path.isdir(_bp):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _bp
+
 import uvicorn
 import webview
 

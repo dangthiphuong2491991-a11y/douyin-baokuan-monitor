@@ -220,6 +220,7 @@
       <div class="grp">加工 / 发布</div>
       <a data-page="dedup"><span class="ic">📐</span>做剪映模版</a>
       <a data-page="jy"><span class="ic">🎬</span>剪映混剪</a>
+      <a data-page="ffd"><span class="ic">⚡</span>一键去重导出</a>
       <a data-page="channels"><span class="ic">📤</span>视频号发布<span class="badge" id="upBadge" style="display:none">0</span></a>
       <div class="grp">配置</div>
       <a data-page="set"><span class="ic">⚙️</span>设置</a>
@@ -383,7 +384,7 @@
       <!-- 做剪映模版 -->
       <section class="page" id="page-dedup">
         <h2 class="hero">做<span class="g">剪映模版</span></h2>
-        <div class="lead">读取你在剪映里手搭好的草稿，把每一层的参数（透明度/蒙版/特效强度/调色/BGM音量…）全部拆成设置。给一个素材库（视频+音乐混放），批量生成 N 个草稿——每个草稿的素材、音乐、所有参数都在你设的随机区间里各不相同。</div>
+        <div class="lead">按项配置去重模版，用素材库批量生成剪映草稿。所有设置自动保存。</div>
 
         <div id="tplNoInstall" class="card" style="display:none;padding:16px 18px;margin-bottom:16px;border-color:var(--warn)">
           ⚠ 没检测到剪映专业版。这个功能需要本机装了剪映（用它自己的引擎解密/加密草稿）。
@@ -391,31 +392,225 @@
 
         <div class="card" style="padding:16px 18px;margin-bottom:16px">
           <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">基准草稿</div><div class="d">你在剪映里搭好效果的那个草稿，点「读取」把所有参数拉出来</div></div>
-            <select id="tplBase" style="min-width:220px"><option>加载中…</option></select>
-            <button class="btn ghost" style="padding:8px 12px" onclick="loadTplDrafts()">🔄</button>
-            <button class="btn" style="padding:8px 14px" onclick="readTplParams(this)">📖 读取参数</button>
-          </div>
-          <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">素材库</div><div class="d">里面放视频(mp4等)和音乐(mp3/wav等)，子文件夹也会扫</div></div>
-            <input id="tplLib" placeholder="点右边选文件夹，或粘贴路径" style="min-width:260px">
-            <button class="btn ghost" style="padding:8px 12px" onclick="pickFolderInto('tplLib')">📁 选择文件夹</button>
+            <div class="l"><div class="t">⏱ 全局时长</div><div class="d">所有层的目标时长：上下蒙版视频不断循环拼接素材，直到都 ≥ 这个长度，草稿总时长也拉到这里</div></div>
+            <input type="number" class="tplC" id="gDurMin" value="15" min="1" max="120" step="1" style="width:76px" onchange="saveTplCfg()"> 分钟
           </div>
         </div>
 
-        <div id="tplPanels"></div>
+        <!-- ═══ 大项①：蒙版设置（上下视频 + 线性蒙版） ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎭 蒙版设置 <span style="color:var(--dim);font-weight:400;font-size:12px">主视频上/下各压一条蒙版视频，线性蒙版渐隐融合（参数取自你手搭的「7月10日」草稿）·时长见上方「全局时长」</span></div>
 
-        <div class="card" id="tplGenCard" style="padding:16px 18px;margin-bottom:16px;display:none">
+          <div style="font-weight:700;font-size:14px;margin:12px 0 4px;color:var(--acc)">⬆ 上方视频</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">素材文件夹</div><div class="d">上方蒙版视频从这里随机抽（启用上方视频时必选）</div></div>
+            <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('bT_folder', saveTplCfg)">📁 选择文件夹</button>
+            <span id="bT_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:340px">未选择</span>
+            <input type="hidden" class="tplC" id="bT_folder">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="bT_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">位置 Y / X</div><div class="d">Y 正=往上（你的草稿 0.683）；X 正=往右</div></div>
+            <input type="number" class="tplC" id="bT_y" value="0.683" step="0.01" style="width:80px" onchange="saveTplCfg()">
+            <input type="number" class="tplC" id="bT_x" value="0" step="0.01" style="width:80px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">缩放 / 旋转</div></div>
+            <span style="font-size:12px;color:var(--sub)">缩放</span><input type="number" class="tplC" id="bT_scale" value="1.0" step="0.01" style="width:76px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">旋转</span><input type="number" class="tplC" id="bT_rotation" value="0" step="1" style="width:76px" onchange="saveTplCfg()"> °
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">不透明度（随机）</div><div class="d">区间内随机取一个值，整条band统一 · 建议 0.60~0.80</div></div>
+            <input type="number" class="tplC" id="bT_alpha_lo" value="0.60" step="0.05" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="bT_alpha_hi" value="0.80" step="0.05" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">线性蒙版</div><div class="d">width/中心X·Y/羽化/反转（你的草稿：0.28 / 0 / 0.415 / 1.0 / 关）</div></div>
+            <label class="switch" title="蒙版开关"><input type="checkbox" class="tplC" id="bT_mask_on" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+            <span style="font-size:12px;color:var(--sub)">width</span><input type="number" class="tplC" id="bT_mk_width" value="0.28" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">中心X</span><input type="number" class="tplC" id="bT_mk_cx" value="0" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">中心Y</span><input type="number" class="tplC" id="bT_mk_cy" value="0.415" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">羽化</span><input type="number" class="tplC" id="bT_mk_feather" value="1.0" step="0.05" min="0" max="1" style="width:70px" onchange="saveTplCfg()">
+            <label class="xvck" title="反转显示侧"><input type="checkbox" class="tplC" id="bT_mk_invert" onchange="saveTplCfg()">反转</label>
+          </div>
+
+          <div style="font-weight:700;font-size:14px;margin:16px 0 4px;color:var(--acc)">⬇ 下方视频</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">素材文件夹</div><div class="d">下方蒙版视频从这里随机抽（启用下方视频时必选）</div></div>
+            <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('bB_folder', saveTplCfg)">📁 选择文件夹</button>
+            <span id="bB_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:340px">未选择</span>
+            <input type="hidden" class="tplC" id="bB_folder">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="bB_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">位置 Y / X</div><div class="d">你的草稿 -0.683（负=往下）</div></div>
+            <input type="number" class="tplC" id="bB_y" value="-0.683" step="0.01" style="width:80px" onchange="saveTplCfg()">
+            <input type="number" class="tplC" id="bB_x" value="0" step="0.01" style="width:80px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">缩放 / 旋转</div></div>
+            <span style="font-size:12px;color:var(--sub)">缩放</span><input type="number" class="tplC" id="bB_scale" value="1.0" step="0.01" style="width:76px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">旋转</span><input type="number" class="tplC" id="bB_rotation" value="0" step="1" style="width:76px" onchange="saveTplCfg()"> °
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">不透明度（随机）</div><div class="d">区间内随机取一个值，整条band统一 · 建议 0.60~0.80</div></div>
+            <input type="number" class="tplC" id="bB_alpha_lo" value="0.60" step="0.05" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="bB_alpha_hi" value="0.80" step="0.05" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">线性蒙版</div><div class="d">你的草稿：0.28 / 0 / -0.40 / 1.0 / <b>反转开</b></div></div>
+            <label class="switch" title="蒙版开关"><input type="checkbox" class="tplC" id="bB_mask_on" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+            <span style="font-size:12px;color:var(--sub)">width</span><input type="number" class="tplC" id="bB_mk_width" value="0.28" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">中心X</span><input type="number" class="tplC" id="bB_mk_cx" value="0" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">中心Y</span><input type="number" class="tplC" id="bB_mk_cy" value="-0.40" step="0.01" style="width:70px" onchange="saveTplCfg()">
+            <span style="font-size:12px;color:var(--sub)">羽化</span><input type="number" class="tplC" id="bB_mk_feather" value="1.0" step="0.05" min="0" max="1" style="width:70px" onchange="saveTplCfg()">
+            <label class="xvck" title="反转显示侧"><input type="checkbox" class="tplC" id="bB_mk_invert" checked onchange="saveTplCfg()">反转</label>
+          </div>
+        </div>
+
+        <!-- ═══ 大项②：背景音乐 BGM ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎵 背景音乐 <span style="color:var(--dim);font-weight:400;font-size:12px">随机选一首循环铺满整条，音量随机</span></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="bgm_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">背景音乐文件夹</div><div class="d">从这里随机抽一首（启用背景音乐时必选）</div></div>
+            <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('bgm_folder', saveTplCfg)">📁 选择文件夹</button>
+            <span id="bgm_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:360px">未选择</span>
+            <input type="hidden" class="tplC" id="bgm_folder">
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">音量</div><div class="d">区间内每次随机取值 · 建议 0.10~0.22，别盖过主视频</div></div>
+            <input type="number" class="tplC" id="bgm_vol_lo" value="0.10" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="bgm_vol_hi" value="0.22" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+        </div>
+
+        <!-- ═══ 大项③：贴纸（用户自己的贴纸图片） ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🏷 贴纸 <span style="color:var(--dim);font-weight:400;font-size:12px">从你的贴纸图片文件夹随机抽几张，贴到画面上（随机大小/位置/不透明度）</span></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="stk_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">贴纸图片文件夹</div><div class="d">放 png/jpg 贴纸图（建议用透明底 png）· 启用贴纸时必选</div></div>
+            <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('stk_folder', saveTplCfg)">📁 选择文件夹</button>
+            <span id="stk_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:360px">未选择</span>
+            <input type="hidden" class="tplC" id="stk_folder">
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">贴几张</div><div class="d">每个草稿随机贴这么多张（可重复用同一张）</div></div>
+            <input type="number" class="tplC" id="stk_count" value="2" min="1" max="10" step="1" style="width:76px" onchange="saveTplCfg()"> 张
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">大小（缩放）</div><div class="d">区间内随机 · 1.0=铺满整屏；贴纸建议 0.2~0.4</div></div>
+            <input type="number" class="tplC" id="stk_scale_lo" value="0.2" step="0.05" min="0.05" max="2" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="stk_scale_hi" value="0.4" step="0.05" min="0.05" max="2" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">不透明度</div><div class="d">区间内随机 · 3%~5% 做隐性去重（几乎看不见但改了像素）；想明显可见改成 0.3~0.5</div></div>
+            <input type="number" class="tplC" id="stk_alpha_lo" value="0.03" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="stk_alpha_hi" value="0.05" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">位置</div><div class="d">贴纸出现在哪些位置（在勾选的里面随机选，带小抖动）· 默认全选</div></div>
+            <label class="xvck"><input type="checkbox" class="tplC" id="stk_pos_tl" checked onchange="saveTplCfg()">左上</label>
+            <label class="xvck"><input type="checkbox" class="tplC" id="stk_pos_tr" checked onchange="saveTplCfg()">右上</label>
+            <label class="xvck"><input type="checkbox" class="tplC" id="stk_pos_bl" checked onchange="saveTplCfg()">左下</label>
+            <label class="xvck"><input type="checkbox" class="tplC" id="stk_pos_br" checked onchange="saveTplCfg()">右下</label>
+            <label class="xvck"><input type="checkbox" class="tplC" id="stk_pos_center" checked onchange="saveTplCfg()">中间</label>
+          </div>
+        </div>
+
+        <!-- ═══ 大项④：特效 ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎆 特效 <span style="color:var(--dim);font-weight:400;font-size:12px">氛围/广角等特效，随机强度（特效种类取自基准草稿，如「广角」）</span></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="fx_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">强度</div><div class="d">区间内随机 · 基准草稿广角=0.51，建议 0.42~0.60</div></div>
+            <input type="number" class="tplC" id="fx_str_lo" value="0.42" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="fx_str_hi" value="0.60" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+        </div>
+
+        <!-- ═══ 大项⑤：滤镜 ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎨 滤镜 <span style="color:var(--dim);font-weight:400;font-size:12px">随机滤镜强度（滤镜种类取自基准草稿，如「8K画质」）</span></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="flt_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">强度</div><div class="d">区间内随机 · 基准草稿=0.455，建议 0.35~0.52</div></div>
+            <input type="number" class="tplC" id="flt_val_lo" value="0.35" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="flt_val_hi" value="0.52" step="0.01" min="0" max="1" style="width:76px" onchange="saveTplCfg()">
+          </div>
+        </div>
+
+        <!-- ═══ 大项⑥：调节（锐化/清晰/色彩/HSL色相） ═══ -->
+        <div class="card" style="padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 调节 <span style="color:var(--dim);font-weight:400;font-size:12px">锐化/清晰/色彩小幅随机 + HSL色相抖动，都控制在小范围，避免画面变动过大</span></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">启用</div></div>
+            <label class="switch"><input type="checkbox" class="tplC" id="adj_enable" checked onchange="saveTplCfg()"><span class="slider"></span></label>
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">亮度</div><div class="d">建议 0.12~0.24（基准0.18）</div></div>
+            <input type="number" class="tplC" id="adj_bri_lo" value="0.12" step="0.01" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="adj_bri_hi" value="0.24" step="0.01" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">锐化</div><div class="d">建议 0.02~0.09（基准0.05）</div></div>
+            <input type="number" class="tplC" id="adj_shp_lo" value="0.02" step="0.01" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="adj_shp_hi" value="0.09" step="0.01" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">清晰度</div><div class="d">建议 0.02~0.08（基准0.04）</div></div>
+            <input type="number" class="tplC" id="adj_clr_lo" value="0.02" step="0.01" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="adj_clr_hi" value="0.08" step="0.01" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">对比度</div><div class="d">±小幅 · 建议 -0.06~0.06</div></div>
+            <input type="number" class="tplC" id="adj_con_lo" value="-0.06" step="0.01" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="adj_con_hi" value="0.06" step="0.01" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">饱和度</div><div class="d">±小幅 · 建议 -0.06~0.06</div></div>
+            <input type="number" class="tplC" id="adj_sat_lo" value="-0.06" step="0.01" style="width:76px" onchange="saveTplCfg()"> ~
+            <input type="number" class="tplC" id="adj_sat_hi" value="0.06" step="0.01" style="width:76px" onchange="saveTplCfg()">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">HSL 色相抖动</div><div class="d">8个颜色通道各随机 ±此值，色相小挪一点 · 建议 ≤10</div></div>
+            ±<input type="number" class="tplC" id="adj_hue" value="6" step="1" min="0" max="10" style="width:76px" onchange="saveTplCfg()">
+          </div>
+        </div>
+
+
+        <div class="card" id="tplGenCard" style="padding:16px 18px;margin-bottom:16px">
           <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">批量生成</div><div class="d">每个草稿重新随机抽素材/音乐/所有区间参数</div></div>
-            <input id="tplPrefix" value="去重" style="width:110px"> ×
-            <input type="number" id="tplCount" value="10" min="1" max="50" style="width:66px;padding:6px 8px"> 个
+            <div class="l"><div class="t">批量生成</div><div class="d">每个草稿从素材库重新随机抽上下视频</div></div>
+            <input id="tplPrefix" value="去重" style="width:110px" onchange="saveTplCfg()"> ×
+            <input type="number" id="tplCount" value="10" min="1" max="50" style="width:66px;padding:6px 8px" onchange="saveTplCfg()"> 个
           </div>
         </div>
 
         <div class="ptoolbar">
-          <span id="tplStatus" style="color:var(--sub)"></span>
-          <button class="btn" id="tplBtn" onclick="runTplGen(this)" style="margin-left:auto" disabled>🎬 批量生成</button>
+          <span style="color:var(--dim);font-size:12px">💡 所有参数改动都会自动保存，也可点右边手动保存</span>
+          <span id="tplStatus" style="color:var(--sub);margin-left:12px"></span>
+          <button class="btn ghost" onclick="saveTplCfgNow(this)" style="margin-left:auto">💾 保存设置</button>
+          <button class="btn" id="tplBtn" onclick="runTplGen(this)" style="margin-left:10px">🎬 批量生成</button>
         </div>
         <div id="tplResult" style="margin-top:14px"></div>
       </section>
@@ -435,35 +630,47 @@
             <select id="jyTemplate" style="min-width:220px"><option>加载中…</option></select>
             <button class="btn ghost" style="padding:8px 12px" onclick="loadJyDrafts()">🔄</button>
           </div>
-          <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">素材来源</div><div class="d">从这个文件夹随机抽视频片段</div></div>
-            <input id="jyFolder" placeholder="点右边选文件夹，或粘贴路径" style="min-width:260px">
-            <button class="btn ghost" style="padding:8px 12px" onclick="pickFolderInto('jyFolder')">📁 选择文件夹</button>
+          <div class="setrow" style="padding:12px 0 6px;align-items:flex-start">
+            <div class="l"><div class="t">素材来源</div><div class="d">从下载库勾选文件夹（可多选），每个草稿从选中的里随机抽片段 · <span id="jyMatCount" style="color:var(--acc)">未选</span></div></div>
+            <button class="btn ghost" style="padding:8px 12px" onclick="loadJyMaterials()">🔄 刷新</button>
+          </div>
+          <div id="jyMatBox" style="margin-bottom:10px"><div class="empty" style="padding:20px">加载中…</div></div>
+          <div class="setrow" style="padding:8px 0">
+            <div class="l"><div class="t" style="font-weight:600">或手动指定文件夹</div><div class="d">下载库以外的素材（填了就用这个，留空则用上面勾选的）</div></div>
+            <input id="jyFolder" placeholder="可留空；或点右边选/粘贴路径" style="min-width:220px">
+            <button class="btn ghost" style="padding:8px 12px" onclick="pickFolderInto('jyFolder')">📁</button>
           </div>
           <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">定量方式</div><div class="d">每个草稿装多少片段</div></div>
-            <select id="jyMode" onchange="jyModeChange()">
+            <div class="l"><div class="t">按集数顺序</div><div class="d">开：每 N 集顺序切一个草稿（1-3、4-6…），自动覆盖全部集数（忽略下面生成数量）· 关：随机抽</div></div>
+            <label class="switch"><input type="checkbox" id="jySeq" checked onchange="jySeqChange();saveJyCfg()"><span class="slider"></span></label>
+            <span id="jySeqWrap">每 <input type="number" id="jySeqN" value="3" min="1" max="50" style="width:60px;padding:6px 8px" onchange="updateJyMatCount();saveJyCfg()"> 集一个草稿</span>
+          </div>
+          <div class="setrow" style="padding:12px 0" id="jyModeRow">
+            <div class="l"><div class="t">定量方式</div><div class="d">（随机模式下）每个草稿装多少片段</div></div>
+            <select id="jyMode" onchange="jyModeChange();saveJyCfg()">
               <option value="count">固定条数</option>
               <option value="duration">按目标时长填满</option>
             </select>
-            <span id="jyCountWrap">每草稿 <input type="number" id="jyNClips" value="5" min="1" max="50" style="width:66px;padding:6px 8px"> 条</span>
-            <span id="jyDurWrap" style="display:none">目标 <input type="number" id="jyTargetSec" value="60" min="5" step="5" style="width:72px;padding:6px 8px"> 秒</span>
+            <span id="jyCountWrap">每草稿 <input type="number" id="jyNClips" value="5" min="1" max="50" style="width:66px;padding:6px 8px" onchange="saveJyCfg()"> 条</span>
+            <span id="jyDurWrap" style="display:none">目标 <input type="number" id="jyTargetSec" value="60" min="5" step="5" style="width:72px;padding:6px 8px" onchange="saveJyCfg()"> 秒</span>
           </div>
           <div class="setrow" style="padding:12px 0">
             <div class="l"><div class="t">随机变速</div><div class="d">每个片段在这个范围内随机取速（过原创）</div></div>
-            <input type="number" id="jySpeedMin" value="0.9" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px"> ~
-            <input type="number" id="jySpeedMax" value="1.0" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px"> 倍
+            <input type="number" id="jySpeedMin" value="1.02" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px" onchange="saveJyCfg()"> ~
+            <input type="number" id="jySpeedMax" value="1.04" step="0.01" min="0.5" max="2" style="width:66px;padding:6px 8px" onchange="saveJyCfg()"> 倍
           </div>
-          <div class="setrow" style="padding:12px 0">
-            <div class="l"><div class="t">生成数量 / 命名</div><div class="d">一次生成几个草稿，草稿名前缀</div></div>
-            <input id="jyPrefix" value="混剪" style="width:120px"> ×
-            <input type="number" id="jyCount" value="3" min="1" max="50" style="width:66px;padding:6px 8px"> 个
+          <div class="setrow" style="padding:12px 0" id="jyGenRow">
+            <div class="l"><div class="t">草稿命名</div><div class="d"><span id="jyGenHint">草稿名前缀（顺序模式下自动加"_合集_第X-Y集"）</span></div></div>
+            <input id="jyPrefix" value="混剪" style="width:120px" onchange="saveJyCfg()">
+            <span id="jyCountPart"> × <input type="number" id="jyCount" value="3" min="1" max="50" style="width:66px;padding:6px 8px" onchange="saveJyCfg()"> 个</span>
           </div>
         </div>
 
         <div class="ptoolbar">
-          <span id="jyStatus" style="color:var(--sub)"></span>
-          <button class="btn" id="jyBtn" onclick="runJy(this)" style="margin-left:auto">🎬 开始生成草稿</button>
+          <span style="color:var(--dim);font-size:12px">💡 设置自动保存，也可点右边手动保存</span>
+          <span id="jyStatus" style="color:var(--sub);margin-left:12px"></span>
+          <button class="btn ghost" onclick="saveJyCfgNow(this)" style="margin-left:auto">💾 保存设置</button>
+          <button class="btn" id="jyBtn" onclick="runJy(this)" style="margin-left:10px">🎬 开始生成草稿</button>
         </div>
         <div id="jyResult" style="margin-top:14px"></div>
 
@@ -485,6 +692,175 @@
         </div>
       </section>
 
+      <!-- 一键去重导出（ffmpeg 纯代码，不用剪映） -->
+      <section class="page" id="page-ffd">
+        <h2 class="hero">一键<span class="g">去重导出</span></h2>
+        <div class="lead">纯代码（ffmpeg）直接出 mp4，全自动、不用剪映、不占鼠标。主画面+上下蒙版融合+变速+调色+贴纸+BGM，按集顺序切块，直接导出到成片文件夹。<b style="color:var(--warn)">剪映专有的广角/8K做不了，但去重强度够。</b></div>
+
+        <div class="card" style="padding:12px 18px 6px;align-items:flex-start;margin-bottom:14px">
+          <div class="setrow" style="padding:12px 0 6px;align-items:flex-start">
+            <div class="l"><div class="t">素材来源</div><div class="d">从下载库勾选合集（可多选），按集数顺序去重 · <span id="fdMatCount" style="color:var(--acc)">未选</span></div></div>
+            <button class="btn ghost" style="padding:8px 12px" onclick="loadFdMaterials()">🔄 刷新</button>
+          </div>
+          <div id="fdMatBox" style="margin-bottom:10px"><div class="empty" style="padding:20px">加载中…</div></div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">每 N 集一个成品</div><div class="d">1-3、4-6… 顺序切块，自动覆盖全部 · <span id="fdChunkHint" style="color:var(--acc)"></span></div></div>
+            <input type="number" class="fdC" id="fd_per" value="3" min="1" max="50" style="width:70px" onchange="updateFdMatCount();saveFdCfg()"> 集
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">同时生成（并发）</div><div class="d">几条成品同时渲染。越大越快、越吃CPU/内存；一般2~3合适 · 默认 2</div></div>
+            <input type="number" class="fdC" id="fd_conc" value="2" min="1" max="8" style="width:70px" onchange="saveFdCfg()"> 条
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">每条成品变体数</div><div class="d">同一成品渲染N个不同随机参数的版本(命名"_变体2/3…")。<b>同一个剧发多个账号时每号发不同变体</b>，指纹互不相同更安全 · 默认 1</div></div>
+            <input type="number" class="fdC" id="fd_variants" value="1" min="1" max="5" style="width:70px" onchange="saveFdCfg()"> 个
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">视频码率（上传友好）</div><div class="d">限码率=体积可控、上传快。原画质=CRF恒定质量、体积大上传慢。发视频号建议 6~8M（画质几乎无差，体积砍一半多）</div></div>
+            <select class="fdC" id="fd_vbitrate" style="width:130px" onchange="saveFdCfg()">
+              <option value="0" selected>原画质(不限)</option>
+              <option value="10">10 Mbps</option>
+              <option value="8">8 Mbps</option>
+              <option value="6">6 Mbps</option>
+              <option value="4">4 Mbps(最小)</option>
+            </select>
+          </div>
+          <div class="setrow" style="padding:10px 0">
+            <div class="l"><div class="t">导出到</div><div class="d">成品 mp4 存这里（留空 = 用剪映成片输出文件夹）</div></div>
+            <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('fd_out', saveFdCfg)">📁 选择文件夹</button>
+            <span id="fd_out_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:340px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_out">
+          </div>
+        </div>
+
+        <!-- 上下蒙版 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎭 上下蒙版 <span style="color:var(--dim);font-weight:400;font-size:12px">上下各一条视频，线性渐隐融合到主画面边缘（厚度/透明度可调，越薄越柔和越像剪映）</span></div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">覆盖高度 / 透明度（都是随机区间）</div><div class="d">从参考视频逐行实测复刻：素材等比缩放贴上/下边(不变形)，<b>透明度从边缘峰值线性渐变到0</b>(跨度=覆盖高度，无实心段)，中间完全不叠加。每条带在区间内独立随机取值 · 建议 覆盖 400~460、透明 0.6~0.8</div></div>
+            <span style="font-size:12px;color:var(--sub)">覆盖</span><input type="number" class="fdC" id="fd_band_h_lo" value="400" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">~</span><input type="number" class="fdC" id="fd_band_h_hi" value="460" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="number" class="fdC" id="fd_band_op_lo" value="0.6" min="0.1" max="1" step="0.05" style="width:60px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">~</span><input type="number" class="fdC" id="fd_band_op_hi" value="0.8" min="0.1" max="1" step="0.05" style="width:60px" onchange="saveFdCfg()">
+          </div>
+          <div style="font-weight:700;font-size:14px;margin:12px 0 4px;color:var(--acc)">⬆ 上方蒙版</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用 / 素材文件夹</div><div class="d">从这里随机抽一条铺顶部</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_bT_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bT_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_bT_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_bT_folder">
+          </div>
+          <div style="font-weight:700;font-size:14px;margin:12px 0 4px;color:var(--acc)">⬇ 下方蒙版</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用 / 素材文件夹</div><div class="d">从这里随机抽一条铺底部</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_bB_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bB_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_bB_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_bB_folder">
+          </div>
+        </div>
+
+        <!-- 变速 + 调色 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 变速 + 调色 <span style="color:var(--dim);font-weight:400;font-size:12px">每条在区间内随机取值 · 小幅改动去重</span></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">变速</div><div class="d">建议 1.02~1.04</div></div>
+            <input type="number" class="fdC" id="fd_spd_lo" value="1.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_spd_hi" value="1.04" step="0.01" style="width:76px" onchange="saveFdCfg()"> 倍</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">亮度</div><div class="d">±小幅 · 建议 0.02~0.05</div></div>
+            <input type="number" class="fdC" id="fd_bri_lo" value="0.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bri_hi" value="0.05" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">对比度</div><div class="d">建议 1.02~1.06</div></div>
+            <input type="number" class="fdC" id="fd_con_lo" value="1.02" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_con_hi" value="1.06" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">饱和度</div><div class="d">建议 1.03~1.08</div></div>
+            <input type="number" class="fdC" id="fd_sat_lo" value="1.03" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_sat_hi" value="1.08" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">锐化</div><div class="d">建议 0.3~0.5</div></div>
+            <input type="number" class="fdC" id="fd_shp_lo" value="0.3" step="0.05" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_shp_hi" value="0.5" step="0.05" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">色相偏移</div><div class="d">±度数 · 建议 -6~6</div></div>
+            <input type="number" class="fdC" id="fd_hue_lo" value="-6" step="1" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_hue_hi" value="6" step="1" style="width:76px" onchange="saveFdCfg()"> °</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">Gamma</div><div class="d">明暗曲线微调 · 建议 0.97~1.03</div></div>
+            <input type="number" class="fdC" id="fd_gam_lo" value="0.97" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_gam_hi" value="1.03" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+        </div>
+
+        <!-- 去重增强 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🛡 去重增强 <span style="color:var(--dim);font-weight:400;font-size:12px">视频指纹/首帧/时长多维扰动，每条成品独立随机</span></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">轻微放大</div><div class="d">放大再裁回，改帧结构（1=不放大） · 建议 1.02~1.05</div></div>
+            <input type="number" class="fdC" id="fd_zoom_lo" value="1.02" step="0.01" min="1" max="1.2" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_zoom_hi" value="1.05" step="0.01" min="1" max="1.2" style="width:76px" onchange="saveFdCfg()"> 倍</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">微旋转</div><div class="d">整帧哈希整体位移，方向随机、自动放大补角 · 建议 0.2~0.6</div></div>
+            <input type="number" class="fdC" id="fd_rot_lo" value="0.2" step="0.1" min="0" max="3" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_rot_hi" value="0.6" step="0.1" min="0" max="3" style="width:76px" onchange="saveFdCfg()"> °</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">广角畸变</div><div class="d">镜头桶形畸变（对应剪映"广角"特效） · 建议 0.02~0.06</div></div>
+            <input type="number" class="fdC" id="fd_lens_lo" value="0.02" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_lens_hi" value="0.06" step="0.01" min="0" max="0.15" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">轻暗角</div><div class="d">四角轻微压暗（类似氛围滤镜） · 建议 0.10~0.25</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_vig_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
+            <input type="number" class="fdC" id="fd_vig_lo" value="0.10" step="0.05" min="0" max="0.6" style="width:70px;margin-left:10px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_vig_hi" value="0.25" step="0.05" min="0" max="0.6" style="width:70px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">掐头 / 去尾</div><div class="d">开头结尾随机裁掉一小段，破坏首尾帧指纹+时长 · 建议头 0.3~1.2s、尾 0~1s</div></div>
+            <span style="font-size:12px;color:var(--sub)">头</span><input type="number" class="fdC" id="fd_head_lo" value="0.3" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">~<input type="number" class="fdC" id="fd_head_hi" value="1.2" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">尾</span><input type="number" class="fdC" id="fd_tail_lo" value="0" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()">~<input type="number" class="fdC" id="fd_tail_hi" value="1.0" step="0.1" min="0" style="width:64px" onchange="saveFdCfg()"> 秒</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">随机镜像概率</div><div class="d">按此概率水平翻转（0=不翻，1=一定翻；有字幕的视频别开）</div></div>
+            <input type="number" class="fdC" id="fd_mirror" value="0" step="0.1" min="0" max="1" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">极淡噪点</div><div class="d">加一层几乎看不见的噪点，改像素</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_noise" onchange="saveFdCfg()"><span class="slider"></span></label></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">元数据</div><div class="d">清空原元数据（始终开），并写入随机"拍摄时间"伪装成普通视频</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_fakemeta" checked onchange="saveFdCfg()"><span class="slider"></span></label> <span style="font-size:12px;color:var(--dim)">随机伪元数据</span></div>
+        </div>
+
+        <!-- 音频去重 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🔊 音频去重 <span style="color:var(--dim);font-weight:400;font-size:12px">平台查重很看声纹；变速已自动同步音频（音画不同步已修）</span></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">音调微移</div><div class="d">变调不变速，直接打碎音频指纹，人耳几乎无感 · 建议 0.97~1.03</div></div>
+            <input type="number" class="fdC" id="fd_pit_lo" value="0.97" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_pit_hi" value="1.03" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">音量微调</div><div class="d">整体响度小幅随机 · 建议 0.95~1.05</div></div>
+            <input type="number" class="fdC" id="fd_avol_lo" value="0.95" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_avol_hi" value="1.05" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">频谱EQ抖动</div><div class="d">低音/高音各随机±1.2dB，再叠一层声纹扰动</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_aeq" checked onchange="saveFdCfg()"><span class="slider"></span></label></div>
+        </div>
+
+        <!-- 贴纸 + BGM -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🏷 贴纸 + 🎵 BGM</div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴纸</div><div class="d">从图片文件夹随机贴几张（随机大小/位置/透明度）</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_stk_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_stk_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_stk_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_stk_folder"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴几张 / 大小 / 不透明度</div></div>
+            <input type="number" class="fdC" id="fd_stk_count" value="2" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="0.6" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="0.8" style="width:64px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.02" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.03" style="width:64px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_bgm_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_bgm_folder"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.12~0.20</div></div>
+            <input type="number" class="fdC" id="fd_bgm_lo" value="0.12" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.20" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+        </div>
+
+        <div class="ptoolbar">
+          <span style="color:var(--dim);font-size:12px">💡 设置自动保存 · ffmpeg 渲染较慢，一集约十几秒到几十秒</span>
+          <span id="fdStatus" style="color:var(--sub);margin-left:12px"></span>
+          <button class="btn ghost" onclick="saveFdCfgNow(this)" style="margin-left:auto">💾 保存设置</button>
+          <button class="btn" id="fdBtn" onclick="runFd(this)" style="margin-left:10px">⚡ 开始去重导出</button>
+        </div>
+        <div id="fdResult" style="margin-top:14px"></div>
+
+        <!-- 去重任务记录 -->
+        <div class="card" style="padding:16px 18px;margin:16px 0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <span style="font-weight:800;font-size:16px">📋 去重任务记录</span>
+            <span class="tag load" id="fdRun">处理 0</span>
+            <span class="tag ok" id="fdOk">成功 0</span>
+            <span class="tag fail" id="fdFail">失败 0</span>
+            <input id="fdtSearch" placeholder="搜索成品名/合集" style="width:180px;margin-left:8px" oninput="renderFdTasks()">
+            <select id="fdtStatus" style="width:100px" onchange="renderFdTasks()"><option value="">全部状态</option><option value="running">处理中</option><option value="done">成功</option><option value="failed">失败</option><option value="cancelled">已取消</option></select>
+            <span style="margin-left:auto;color:var(--sub);font-size:13px">已选 <b id="fdtSelN" style="color:var(--acc2)">0</b></span>
+            <button class="btn ghost" style="padding:6px 10px" onclick="fdtBulk('delete')">删除选中</button>
+            <button class="btn ghost" style="padding:6px 10px" onclick="api('/api/ffdedup/tasks/clear','POST').then(refreshFdStatus)">清成功/失败</button>
+            <button class="btn ghost" style="padding:6px 10px" onclick="window.open('/api/ffdedup/tasks/export')">导出</button>
+          </div>
+          <div id="fdTaskList" style="display:flex;flex-direction:column"></div>
+        </div>
+      </section>
+
       <!-- 视频号发布（仿小V猫：账号管理 + 一键发布） -->
       <section class="page" id="page-channels">
         <style>
@@ -492,7 +868,7 @@
         .jvtab:hover{color:var(--txt)} .jvtab.on{color:var(--acc2);border-bottom:2px solid var(--acc)}
         .jvsub{display:flex;align-items:center;gap:9px;padding:10px 11px;border-radius:9px;color:var(--sub);cursor:pointer;font-size:13.5px;font-weight:500;margin-bottom:3px;user-select:none}
         .jvsub .ic{font-size:15px} .jvsub:hover{background:var(--card2);color:var(--txt)} .jvsub.on{background:#eee9fd;color:var(--acc);font-weight:700}
-        .jvbox{border:1px solid var(--line);border-radius:12px;overflow:hidden;height:calc(100vh - 188px);min-height:520px;display:flex}
+        .jvbox{border:1px solid var(--line);border-radius:12px;overflow:hidden;height:calc(100vh - 118px);min-height:560px;display:flex}
         /* —— 仿小V猫 批量发视频 —— */
         .xvtop{border-bottom:1px solid var(--line);padding:10px 16px;background:var(--sidebar)}
         .xvrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -517,28 +893,44 @@
         .xvbig:hover{border-color:var(--acc);color:var(--acc2)}
         </style>
         <!-- 顶部功能tab（只要这俩） -->
-        <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px">
+        <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:8px">
           <div class="jvtab on" data-fn="accounts" onclick="chFn('accounts')">👤 账号管理</div>
           <div class="jvtab" data-fn="publish" onclick="chFn('publish')">🚀 一键发布</div>
         </div>
 
         <!-- ============ 账号管理 ============ -->
-        <div id="fn-accounts" class="jvfn">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-            <button class="btn" id="chAddBtn" onclick="chAddAccount(this)">＋ 添加账号</button>
-            <input id="chAccSearch" placeholder="🔍 昵称 / ID / 备注 / 分组" oninput="renderAccounts(chAccounts)" style="width:260px">
-            <span id="chAccMeta" class="tag">0 个账号</span>
-            <span style="color:var(--sub);font-size:12px;margin-left:auto">默认分组</span>
+        <div id="fn-accounts" class="jvfn" style="display:flex;height:calc(100vh - 108px);border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)">
+          <!-- 左：账号列表 -->
+          <div style="width:300px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--sidebar)">
+            <div style="padding:10px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--line)">
+              <button class="btn" id="chAddBtn" onclick="chAddAccount(this)" style="padding:7px 12px;font-size:13px">＋ 添加账号</button>
+              <button class="btn ghost" onclick="refreshChannels()" style="padding:7px 10px" title="刷新">🔄</button>
+              <span id="chAccMeta" class="tag" style="margin-left:auto">0 个账号</span>
+            </div>
+            <div style="padding:8px 10px 4px"><input id="chAccSearch" placeholder="🔍 昵称 / ID / 备注" oninput="renderAccounts(chAccounts)" style="width:100%"></div>
+            <div id="chAccList" style="flex:1;overflow:auto;padding:4px 8px 8px;display:flex;flex-direction:column;gap:6px"></div>
+            <div id="chLoginStatus" style="padding:8px 12px;border-top:1px solid var(--line);color:var(--sub);font-size:11px;line-height:1.5">点「＋ 添加账号」扫码登录视频号。<b style="color:var(--warn)">同一微信只能同时在线一个号</b></div>
           </div>
-          <div id="chLoginStatus" style="color:var(--sub);font-size:12.5px;margin-bottom:12px">点「＋ 添加账号」→ 弹出浏览器 → 微信扫码登录一个视频号，重复添加多个。<b style="color:var(--warn)">同一个微信只能同时在线一个视频号（官方规则）。</b></div>
-          <div id="chAccList" style="display:flex;flex-direction:column;gap:8px"></div>
+          <!-- 右：内嵌视频号后台（Electron webview 多标签；绝对定位精确撑满） -->
+          <div style="flex:1;min-width:0;position:relative;background:#fff">
+            <div id="chAcctBackendTabs" style="position:absolute;top:0;left:0;right:212px;height:41px;display:flex;gap:3px;padding:6px 8px 0;background:var(--card2);border-bottom:1px solid var(--line);align-items:flex-end;overflow-x:auto"></div>
+            <div id="chBackendActions" style="position:absolute;top:0;right:0;height:41px;display:none;align-items:center;gap:6px;padding:0 10px;background:var(--card2);border-bottom:1px solid var(--line)">
+              <button class="btn ghost" style="padding:5px 9px;font-size:12px" onclick="clearBackendLogin()" title="清空这个号的后台会话，重新扫码（脏会话/登录失败时用）">🧹 清空重登</button>
+              <button class="btn" style="padding:5px 10px;font-size:12px;background:var(--acc2);color:#fff" onclick="syncBackendLogin()" title="把后台扫码的登录态同步给发布/剧集功能">🔄 同步登录到发布</button>
+            </div>
+            <div id="chAcctBackendBody" style="position:absolute;top:41px;left:0;right:0;bottom:0;background:#fff"></div>
+            <div id="chAcctBackendEmpty" style="position:absolute;top:41px;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--dim);pointer-events:none">
+              <div style="font-size:40px">🖥</div>
+              <div style="margin-top:8px;font-size:13.5px">点左边账号的「查看后台」，在这里打开它的视频号后台</div>
+            </div>
+          </div>
         </div>
 
         <!-- ============ 一键发布 ============ -->
         <div id="fn-publish" class="jvfn" style="display:none">
           <div class="jvbox">
             <!-- 左子菜单 -->
-            <div style="width:150px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--line);padding:12px 8px">
+            <div style="width:118px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--line);padding:12px 7px">
               <a class="jvsub on" data-sub="publish" onclick="chSub('publish')"><span class="ic">📹</span>批量发视频</a>
               <a class="jvsub" data-sub="drafts" onclick="chSub('drafts')"><span class="ic">📁</span>本地草稿箱</a>
               <a class="jvsub" data-sub="tasks" onclick="chSub('tasks')"><span class="ic">📋</span>任务记录</a>
@@ -555,7 +947,7 @@
                   <select id="chTimeMode" style="display:none" onchange="chTimeModeChange();chPreview()">
                     <option value="now">立即发布</option><option value="schedule">定时发布</option><option value="local">本机定时</option></select>
                   <select id="chDistribute" style="display:none" onchange="chDistChange();chPreview()">
-                    <option value="multi">多对一</option><option value="one2one">一对一</option><option value="even">均分</option></select>
+                    <option value="multi">多对一</option><option value="one2one">一对一</option><option value="even">均分</option><option value="folder">按文件夹一对一</option></select>
 
                   <!-- 顶部批量操作条 -->
                   <div class="xvtop">
@@ -585,17 +977,14 @@
                   <!-- 中 + 右 -->
                   <div style="flex:1;display:flex;min-height:0">
                     <div style="flex:1;min-width:0;overflow:auto;padding:16px 18px">
-                      <div style="text-align:center;margin-bottom:10px">
-                        <span class="xvbtn" style="background:var(--acc2);color:#fff;border:0;font-weight:700;padding:9px 24px;font-size:14px" onclick="xvAddMenu(this)">添加视频 ▾</span>
-                      </div>
-                      <div id="chPickList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px"></div>
+                      <div id="chPickList" style="display:flex;flex-direction:column;gap:12px;margin-bottom:12px"></div>
                       <div id="chDrop" style="border:2px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--dim)">
                         <div style="font-size:14px">拖入视频文件到这里识别</div>
                         <div style="font-size:12px;margin-top:4px">支持一次拖入多个视频文件（或点上方「添加视频」）</div>
                       </div>
                       <div id="chLibWrap" style="display:none;margin-top:14px">
                         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-                          <b style="font-size:13px">下载库</b>
+                          <b style="font-size:13px">导出目录（去重成品）</b>
                           <button class="btn ghost" style="padding:5px 10px" onclick="loadChVideos()">🔄 刷新</button>
                           <span style="margin-left:auto;color:var(--sub);font-size:12px" id="chVidMeta"></span>
                           <a onclick="document.getElementById('chLibWrap').style.display='none'" style="color:var(--acc2);cursor:pointer;font-size:12px">收起</a>
@@ -604,7 +993,7 @@
                       </div>
                     </div>
                     <!-- 右：平台和账号配置 -->
-                    <div style="width:290px;flex-shrink:0;border-left:1px solid var(--line);padding:16px;display:flex;flex-direction:column;overflow:auto">
+                    <div style="width:246px;flex-shrink:0;border-left:1px solid var(--line);padding:14px 13px;display:flex;flex-direction:column;overflow:auto">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                         <b style="font-size:15px">平台和账号配置</b>
                         <a onclick="chSelAllAcc()" style="margin-left:auto;color:var(--acc2);cursor:pointer;font-size:12px">全选在线</a>
@@ -636,7 +1025,12 @@
                           <label style="display:flex;flex-direction:column;gap:3px">添加到合集
                             <input id="chCollection" list="chCollList" placeholder="请选择（点上方拉取后可选）"><datalist id="chCollList"></datalist></label>
                           <label style="display:flex;flex-direction:column;gap:3px">扩展链接·视频号剧集
-                            <input id="chDrama" list="chDramaList" placeholder="选择视频号剧集"><datalist id="chDramaList"></datalist></label>
+                            <input type="hidden" id="chDrama"><input type="hidden" id="chDramaExport">
+                            <div style="display:flex;gap:6px;align-items:center">
+                              <button class="btn ghost" style="padding:6px 11px;font-size:12.5px;white-space:nowrap" onclick="openDramaPicker()">选择视频号剧集 ▾</button>
+                              <span id="chDramaShow" style="color:var(--sub);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">未选择</span>
+                              <a id="chDramaClear" onclick="clearDrama()" style="display:none;color:var(--acc2);cursor:pointer;font-size:12px;white-space:nowrap">清除</a>
+                            </div></label>
                           <label style="display:flex;flex-direction:column;gap:3px">活动
                             <input id="chActivity" placeholder="输入内容搜索活动"></label>
                           <label style="display:flex;flex-direction:column;gap:3px">视频声明
@@ -652,6 +1046,25 @@
                         <div style="cursor:pointer;font-size:13px;user-select:none" onclick="togglePreview()"><span id="xvPrevArrow">▸</span> 分发任务预览</div>
                         <div id="chPreviewBox" style="display:none;margin-top:8px"></div>
                         <div style="text-align:right;color:var(--dim);font-size:12px;margin-top:6px">作品: <b id="xvWorkCount">0</b>　账号: <b id="xvAccCount">0</b></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 视频号剧集选择弹窗（仿小V猫） -->
+                  <div id="dramaModal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.4);align-items:center;justify-content:center">
+                    <div style="width:600px;max-width:92vw;max-height:82vh;background:var(--card);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden">
+                      <div style="display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)">
+                        <b style="font-size:16px">选择需要关联的视频号剧集</b>
+                        <span onclick="closeDramaPicker()" style="margin-left:auto;cursor:pointer;font-size:20px;color:var(--sub)">×</span>
+                      </div>
+                      <div style="padding:14px 20px 8px">
+                        <input id="dramaSearch" placeholder="搜索名称" oninput="renderDramaList()" style="width:100%">
+                      </div>
+                      <div style="padding:6px 20px;color:var(--sub);font-size:12.5px;font-weight:600;background:var(--card2)">视频号剧集信息</div>
+                      <div id="dramaList" style="flex:1;overflow:auto;padding:4px 12px 8px"></div>
+                      <div style="display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line)">
+                        <button class="btn ghost" onclick="closeDramaPicker()">取消</button>
+                        <button class="btn" id="dramaAddBtn" onclick="confirmDrama()" style="background:var(--acc2);color:#fff">添加</button>
                       </div>
                     </div>
                   </div>
@@ -685,6 +1098,11 @@
                           <option value="300">5分钟</option><option value="600">10分钟</option><option value="900">15分钟</option><option value="1200">20分钟</option></select>
                         <span style="color:var(--dim);font-size:12px">同平台多账号之间；不同平台无需间隔</span>
                       </div>
+                      <div style="display:flex;align-items:center;gap:12px;border-top:1px dashed var(--line);padding-top:10px;margin-top:2px">
+                        <b style="width:74px">同时上传：</b>
+                        <input type="number" id="chMaxConc" value="3" min="1" max="20" style="width:60px" onchange="saveChConc()"> 个账号并发
+                        <span style="color:var(--dim);font-size:12px">后台无窗口运行；不同账号同时传，同账号内部仍串行+随机间隔防封号。改后需重启软件生效</span>
+                      </div>
                     </div>
                   </div>
 
@@ -695,6 +1113,7 @@
                       <span class="xvptab" id="xvdm-multi" onclick="xvDist('multi')">多对一</span>
                       <span class="xvptab" id="xvdm-one2one" onclick="xvDist('one2one')">一对一</span>
                       <span class="xvptab" id="xvdm-even" onclick="xvDist('even')">均分</span>
+                      <span class="xvptab" id="xvdm-folder" onclick="xvDist('folder')">按文件夹一对一</span>
                     </div>
                     <div id="xvEvenPanel" style="display:none;margin-bottom:14px">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">每个号一天发 <input type="number" id="chEvenPerDay" value="2" min="1" max="50" onchange="chPreview()" style="width:56px"> 条</div>
@@ -717,17 +1136,40 @@
                   <div id="chDraftList" style="display:flex;flex-direction:column;gap:8px"></div>
                 </div>
 
-                <!-- 任务记录 -->
-                <div class="jvview" id="jv-tasks" style="display:none;padding:16px 18px;height:100%;overflow:auto">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-                    <span style="font-weight:800;font-size:16px">任务记录</span>
-                    <span class="tag load" id="upRunning">进行 0</span>
-                    <span class="tag ok" id="upDone">完成 0</span>
-                    <span class="tag fail" id="upFailed">失败 0</span>
-                    <button class="btn ghost" id="upRetryBtn" onclick="chRetry(this)" style="margin-left:auto;display:none">🔁 重试失败</button>
-                    <button class="btn ghost" onclick="chClear()">🧹 清除完成/失败</button>
+                <!-- 任务记录（仿小V猫：筛选条 + 富信息行 + 底部批量操作） -->
+                <div class="jvview" id="jv-tasks" style="display:none;height:100%;flex-direction:column">
+                  <div style="padding:12px 16px 8px;border-bottom:1px solid var(--line)">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+                      <span style="font-weight:800;font-size:16px">任务记录</span>
+                      <span class="tag load" id="upRunning">进行 0</span>
+                      <span class="tag ok" id="upDone">已同步 0</span>
+                      <span class="tag fail" id="upFailed">失败 0</span>
+                      <span class="tag" id="upCancelled">已取消 0</span>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      <input id="tkSearch" placeholder="搜索标题、描述、文件名" style="width:190px" oninput="renderTaskList()">
+                      <select id="tkPlat" style="width:100px" onchange="renderTaskList()"><option value="">筛选平台</option><option>视频号</option></select>
+                      <input id="tkAcc" placeholder="搜索账号名称、id" style="width:150px" oninput="renderTaskList()">
+                      <select id="tkStatus" style="width:110px" onchange="renderTaskList()">
+                        <option value="">请选择状态</option><option value="queued">排队中</option><option value="running">上传中</option>
+                        <option value="done">已同步</option><option value="failed">失败</option><option value="cancelled">已取消</option></select>
+                      <select id="tkType" style="width:96px" onchange="renderTaskList()"><option value="">作品类型</option><option>视频</option></select>
+                      <input type="date" id="tkFrom" style="width:132px" onchange="renderTaskList()" title="开始日期">
+                      <span style="color:var(--dim);align-self:center">→</span>
+                      <input type="date" id="tkTo" style="width:132px" onchange="renderTaskList()" title="结束日期">
+                      <select id="tkBatch" style="width:170px" onchange="renderTaskList()"><option value="">批次筛选</option></select>
+                    </div>
                   </div>
-                  <div id="upList" style="display:flex;flex-direction:column;gap:8px"></div>
+                  <div id="upList" style="flex:1;overflow:auto;padding:8px 16px;display:flex;flex-direction:column;gap:0"></div>
+                  <div style="border-top:1px solid var(--line);padding:9px 16px;display:flex;gap:8px;align-items:center;background:var(--sidebar);flex-wrap:wrap">
+                    <button class="btn" style="padding:7px 14px" onclick="tkBulk('retry')">批量重发</button>
+                    <button class="btn ghost" onclick="tkBulk('delete')">批量删除</button>
+                    <button class="btn ghost" onclick="tkBulk('pause')">批量暂停</button>
+                    <button class="btn ghost" onclick="window.open('/api/channels/tasks/export')">导出记录</button>
+                    <span style="margin-left:auto;color:var(--sub);font-size:13px">已选择: <b id="tkSelN" style="color:var(--acc2)">0</b></span>
+                    <a onclick="tkSel.clear();renderTaskList()" style="color:var(--acc2);cursor:pointer;font-size:13px">清空选择</a>
+                    <a onclick="tkSelectAll()" style="color:var(--acc2);cursor:pointer;font-size:13px">全选</a>
+                  </div>
                 </div>
 
               </div>
@@ -957,7 +1399,7 @@ async function api(url, method='GET', body){
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
 
 /* nav */
-const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'做剪映模版',jy:'剪映混剪',channels:'视频号发布',set:'设置'};
+const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'做剪映模版',jy:'剪映混剪',ffd:'一键去重导出',channels:'视频号发布',set:'设置'};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on');
@@ -965,11 +1407,14 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.page').forEach(s=>s.classList.remove('on'));
   document.getElementById('page-'+p).classList.add('on');
   document.getElementById('pageTitle').textContent=titles[p];
+  // 视频号发布页隐藏顶部标题栏(标题+上次检查对发布无意义)，给中间发布区腾出空间
+  const tb=document.querySelector('.topbar'); if(tb) tb.style.display=(p==='channels')?'none':'flex';
   if(p==='lib') loadLib();
   if(p==='tasks') startTaskPoll();
   if(p==='channels') openChannels();
   if(p==='dedup') openTpl();
   if(p==='jy') openJy();
+  if(p==='ffd') openFfd();
 });
 
 function render(st){
@@ -1141,7 +1586,7 @@ function renderLib(){
           ${f.is_video
             ? `<div class="thumb" style="display:grid;place-items:center;position:relative">${g.is_mix?`<span style="font-size:22px;font-weight:800;color:var(--acc2)">${esc(dlLabel(f,true))}</span>`:'<span style="font-size:34px">🎬</span>'}<span class="playbtn" style="font-size:14px">▶</span></div>`
             : `<img class="thumb" src="${esc(f.url)}">`}
-          <div class="cap">${f.is_video?'▶ ':''}${g.is_mix?esc(dlLabel(f,true))+' · ':''}<b>${f.size}</b> MB</div>
+          <div class="cap">${f.is_video?'▶ ':''}${g.is_mix?esc(dlLabel(f,true))+' · ':''}<b>${f.size}</b> MB${f.mtime?` · <span style="color:var(--dim)">📅 ${_fmtDate(f.mtime)}</span>`:''}</div>
         </div>`).join('')}</div>`;
     return;
   }
@@ -1150,6 +1595,7 @@ function renderLib(){
       ${FOLDER_SVG}
       <div class="foldname">${esc(g.blogger)}</div>
       <div class="foldsub">${g.count} ${g.is_mix?'集':'个'} · ${_fmtMB(_grpSize(g))}</div>
+      <div class="foldsub" style="color:var(--dim);font-size:11px">📅 ${g.mtime?_fmtDate(g.mtime):'—'}</div>
     </div>`).join('')}</div>`;
 }
 
@@ -1198,7 +1644,55 @@ async function clearTasks(){ try{ await api('/api/tasks/clear','POST'); loadTask
 
 /* ---- 剪映混剪 ---- */
 let jyTimer=null;
-function openJy(){ loadJyDrafts(); startJyPoll(); loadJyOutDel(); }
+function openJy(){ loadJyDrafts(); startJyPoll(); loadJyOutDel(); loadJyMaterials().then(loadJyCfg); }
+
+/* ---- 剪映混剪 素材来源：下载库文件夹卡片，多选 ---- */
+let jyMatVideos=[], jySelFolders=new Set();
+async function loadJyMaterials(){
+  const box=document.getElementById('jyMatBox');
+  try{
+    const d=await api('/api/channels/videos');   // 默认=下载库位置（+成片输出）
+    jyMatVideos=d.videos||[];
+    renderJyMaterials();
+  }catch(e){ box.innerHTML=emptyBox('⚠','读取下载库失败',e.message||''); }
+}
+function _sizeStr(mb){ return mb>=1024?(mb/1024).toFixed(2)+' GB':Math.round(mb)+' MB'; }
+function renderJyMaterials(){
+  const box=document.getElementById('jyMatBox');
+  const grps=_grpVideos(jyMatVideos);
+  if(!grps.length){ box.innerHTML=emptyBox('📭','下载库还没有视频','先去下载一些，或用下面「手动指定文件夹」'); updateJyMatCount(); return; }
+  box.innerHTML=`<div class="foldgrid">${grps.map(g=>{
+    const sel=jySelFolders.has(g.key);
+    const totMB=g.videos.reduce((s,v)=>s+(v.size||0),0);
+    return `<div class="foldtile ${sel?'sel':''}" onclick='jyToggleFolder(${JSON.stringify(g.key)})' title="${esc(g.key)}">
+      ${FOLDER_SVG}<span class="foldcheck">✓</span>
+      <div class="foldname">${esc(g.key)}</div>
+      <div class="foldsub">${g.videos.length} 集 · ${_sizeStr(totMB)}</div>
+      <div class="foldsub" style="color:var(--dim);font-size:11px">📅 ${_grpDate(g)||'—'}</div>
+    </div>`;
+  }).join('')}</div>`;
+  updateJyMatCount();
+}
+function jyToggleFolder(key){ jySelFolders.has(key)?jySelFolders.delete(key):jySelFolders.add(key); renderJyMaterials(); saveJyCfg(); }
+function jySelectedClipPaths(){ return jyMatVideos.filter(v=>jySelFolders.has(_folderKey(v))).map(v=>v.path); }
+function updateJyMatCount(){
+  const el=document.getElementById('jyMatCount'); if(!el) return;
+  const n=jySelFolders.size, c=jySelectedClipPaths().length;
+  el.textContent = n?`已选 ${n} 个文件夹 · 共 ${c} 集`:'未选';
+  // 顺序模式：算出会生成几个草稿（每N集一个，最后一个可能不足），显示给用户
+  const seq=document.getElementById('jySeq');
+  const hint=document.getElementById('jyGenHint');
+  if(seq&&hint){
+    if(seq.checked){
+      const per=parseInt(document.getElementById('jySeqN').value)||3;
+      const drafts=Math.ceil(c/per);
+      const rem=c%per;
+      hint.innerHTML = c? `📋 顺序模式：${c} 集 ÷ 每 ${per} 集 = <b style="color:var(--acc)">${drafts} 个草稿</b>${rem?`（最后一个 ${rem} 集）`:''} · 草稿名前缀` : '顺序模式：先在上面勾选素材文件夹 · 草稿名前缀';
+    }else{
+      hint.textContent='（随机模式）一次生成几个草稿 · 草稿名前缀';
+    }
+  }
+}
 async function loadJyOutDel(){
   try{ const o=await api('/api/jy/output_dir'); if(o) document.getElementById('jyOut').value=o.path||''; }catch(e){}
   try{
@@ -1240,16 +1734,213 @@ function jyModeChange(){
   document.getElementById('jyCountWrap').style.display=m==='count'?'inline':'none';
   document.getElementById('jyDurWrap').style.display=m==='duration'?'inline':'none';
 }
+function jySeqChange(){
+  const seq=document.getElementById('jySeq').checked;
+  document.getElementById('jySeqWrap').style.display=seq?'inline':'none';
+  document.getElementById('jyModeRow').style.display=seq?'none':'flex';   // 随机才用的定量方式，顺序模式整行隐藏
+  const cp=document.getElementById('jyCountPart');                        // 「×N 个」只随机模式用，顺序模式直接隐藏
+  if(cp) cp.style.display=seq?'none':'inline';
+  updateJyMatCount();
+}
+/* ===== 剪映混剪设置：自动保存 / 手动保存 / 加载 ===== */
+const _JY_IDS=['jySeq','jySeqN','jyMode','jyNClips','jyTargetSec','jySpeedMin','jySpeedMax','jyPrefix','jyCount'];
+let _jySaveTimer=null;
+function _collectJyVals(){
+  const v={};
+  _JY_IDS.forEach(id=>{ const e=document.getElementById(id); if(e) v[id]=(e.type==='checkbox')?e.checked:e.value; });
+  v._folders=[...jySelFolders];   // 勾选的下载库文件夹也记住
+  return v;
+}
+function saveJyCfg(){
+  clearTimeout(_jySaveTimer);
+  _jySaveTimer=setTimeout(async()=>{ try{ await api('/api/jy/mix_cfg','POST',{cfg:_collectJyVals()}); }catch(e){} },400);
+}
+async function saveJyCfgNow(btn){
+  const old=btn?btn.innerHTML:''; if(btn){ btn.disabled=true; btn.textContent='保存中…'; }
+  clearTimeout(_jySaveTimer);
+  try{ await api('/api/jy/mix_cfg','POST',{cfg:_collectJyVals()}); toast('✅ 剪映混剪设置已保存'); }
+  catch(e){ uiAlert(e.message||'保存失败'); }
+  if(btn){ btn.disabled=false; btn.innerHTML=old; }
+}
+async function loadJyCfg(){
+  try{
+    const d=await api('/api/jy/mix_cfg'); const v=(d&&d.cfg)||{};
+    _JY_IDS.forEach(id=>{ const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; } });
+    if(Array.isArray(v._folders)) jySelFolders=new Set(v._folders);   // 恢复勾选的文件夹
+  }catch(e){}
+  jySeqChange(); renderJyMaterials();
+}
+
+/* ============ 一键去重导出（ffmpeg） ============ */
+let fdTimer=null, fdMatVideos=[], fdSelFolders=new Set();
+function openFfd(){ loadFfdMaterials().then(loadFdCfg); startFdPoll(); }
+async function loadFfdMaterials(){
+  const box=document.getElementById('fdMatBox');
+  try{ const d=await api('/api/channels/videos'); fdMatVideos=d.videos||[]; renderFdMaterials(); }
+  catch(e){ box.innerHTML=emptyBox('⚠','读取下载库失败',e.message||''); }
+}
+function loadFdMaterials(){ return loadFfdMaterials(); }
+function renderFdMaterials(){
+  const box=document.getElementById('fdMatBox'); const grps=_grpVideos(fdMatVideos);
+  if(!grps.length){ box.innerHTML=emptyBox('📭','下载库还没有视频','先去下载一些'); updateFdMatCount(); return; }
+  box.innerHTML=`<div class="foldgrid">${grps.map(g=>{
+    const sel=fdSelFolders.has(g.key); const totMB=g.videos.reduce((s,v)=>s+(v.size||0),0);
+    return `<div class="foldtile ${sel?'sel':''}" onclick='fdToggleFolder(${JSON.stringify(g.key)})' title="${esc(g.key)}">
+      ${FOLDER_SVG}<span class="foldcheck">✓</span><div class="foldname">${esc(g.key)}</div>
+      <div class="foldsub">${g.videos.length} 集 · ${_sizeStr(totMB)}</div>
+      <div class="foldsub" style="color:var(--dim);font-size:11px">📅 ${_grpDate(g)||'—'}</div></div>`; }).join('')}</div>`;
+  updateFdMatCount();
+}
+function fdToggleFolder(k){ fdSelFolders.has(k)?fdSelFolders.delete(k):fdSelFolders.add(k); renderFdMaterials(); saveFdCfg(); }
+function fdSelectedClipPaths(){ return fdMatVideos.filter(v=>fdSelFolders.has(_folderKey(v))).map(v=>v.path); }
+function updateFdMatCount(){
+  const el=document.getElementById('fdMatCount'); if(!el) return;
+  const c=fdSelectedClipPaths().length, per=parseInt(document.getElementById('fd_per').value)||3;
+  el.textContent=fdSelFolders.size?`已选 ${fdSelFolders.size} 个文件夹 · 共 ${c} 集`:'未选';
+  const h=document.getElementById('fdChunkHint');
+  if(h){ const n=Math.ceil(c/per), rem=c%per; h.textContent=c?`${n} 个成品${rem?`（最后一个 ${rem} 集）`:''}`:''; }
+}
+const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band_h_lo','fd_band_h_hi','fd_band_op_lo','fd_band_op_hi','fd_bT_enable','fd_bT_folder','fd_bB_enable','fd_bB_folder',
+  'fd_spd_lo','fd_spd_hi','fd_bri_lo','fd_bri_hi','fd_con_lo','fd_con_hi','fd_sat_lo','fd_sat_hi','fd_shp_lo','fd_shp_hi','fd_hue_lo','fd_hue_hi','fd_gam_lo','fd_gam_hi',
+  'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
+  'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
+  'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
+  'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi'];
+function _fdVals(){ const v={}; _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e) v[id]=(e.type==='checkbox')?e.checked:e.value;}); v._folders=[...fdSelFolders]; return v; }
+let _fdSaveT=null;
+function saveFdCfg(){ clearTimeout(_fdSaveT); _fdSaveT=setTimeout(async()=>{try{await api('/api/ffdedup/cfg','POST',{cfg:_fdVals()});}catch(e){}},400); }
+async function saveFdCfgNow(btn){ const o=btn?btn.innerHTML:''; if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  clearTimeout(_fdSaveT); try{await api('/api/ffdedup/cfg','POST',{cfg:_fdVals()}); toast('✅ 去重设置已保存');}catch(e){uiAlert(e.message);}
+  if(btn){btn.disabled=false;btn.innerHTML=o;} }
+async function loadFdCfg(){
+  try{ const d=await api('/api/ffdedup/cfg'); const v=(d&&d.cfg)||{};
+    _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; }});
+    if(Array.isArray(v._folders)) fdSelFolders=new Set(v._folders);
+  }catch(e){}
+  ['fd_out','fd_bT_folder','fd_bB_folder','fd_stk_folder','fd_bgm_folder'].forEach(syncPathShow);
+  renderFdMaterials();
+}
+function buildFdCfg(){
+  const n=(id,d)=>{const v=parseFloat(document.getElementById(id).value); return isNaN(v)?d:v;};
+  const on=id=>document.getElementById(id).checked;
+  const f=id=>(document.getElementById(id).value||'').trim();
+  return { vbitrate:n('fd_vbitrate',0),
+    bands:{ band_h:[n('fd_band_h_lo',400),n('fd_band_h_hi',460)], opacity:[n('fd_band_op_lo',0.6),n('fd_band_op_hi',0.8)],
+      top:{enable:on('fd_bT_enable'), folder:f('fd_bT_folder')}, bottom:{enable:on('fd_bB_enable'), folder:f('fd_bB_folder')} },
+    color:{ brightness:[n('fd_bri_lo',0.02),n('fd_bri_hi',0.05)], contrast:[n('fd_con_lo',1.02),n('fd_con_hi',1.06)],
+      saturation:[n('fd_sat_lo',1.03),n('fd_sat_hi',1.08)], sharpen:[n('fd_shp_lo',0.3),n('fd_shp_hi',0.5)],
+      hue:[n('fd_hue_lo',-6),n('fd_hue_hi',6)], gamma:[n('fd_gam_lo',0.97),n('fd_gam_hi',1.03)] },
+    speed:[n('fd_spd_lo',1.02),n('fd_spd_hi',1.04)],
+    zoom:[n('fd_zoom_lo',1.02),n('fd_zoom_hi',1.05)],
+    rotate:[n('fd_rot_lo',0.2),n('fd_rot_hi',0.6)],
+    lens:[n('fd_lens_lo',0.02),n('fd_lens_hi',0.06)],
+    vignette:{ enable:on('fd_vig_enable'), range:[n('fd_vig_lo',0.10),n('fd_vig_hi',0.25)] },
+    trim:{ head:[n('fd_head_lo',0.3),n('fd_head_hi',1.2)], tail:[n('fd_tail_lo',0),n('fd_tail_hi',1.0)] },
+    audio:{ pitch:[n('fd_pit_lo',0.97),n('fd_pit_hi',1.03)], volume:[n('fd_avol_lo',0.95),n('fd_avol_hi',1.05)], eq:on('fd_aeq') },
+    fake_meta:on('fd_fakemeta'),
+    mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
+    stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',2),
+      scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
+    bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] } };
+}
+async function runFd(btn){
+  const clips=fdSelectedClipPaths();
+  if(!clips.length){ uiAlert('先在上面勾选素材文件夹（可多选）'); return; }
+  const cfg=buildFdCfg();
+  if(cfg.bands.top.enable && !cfg.bands.top.folder){ uiAlert('上方蒙版已启用，请先选它的文件夹'); return; }
+  if(cfg.bands.bottom.enable && !cfg.bands.bottom.folder){ uiAlert('下方蒙版已启用，请先选它的文件夹'); return; }
+  if(cfg.bgm.enable && !cfg.bgm.folder){ uiAlert('背景音乐已启用，请先选音乐文件夹'); return; }
+  if(cfg.stickers.enable && !cfg.stickers.folder){ uiAlert('贴纸已启用，请先选贴纸文件夹'); return; }
+  saveFdCfg();
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='导出中…';
+  try{
+    await api('/api/ffdedup/render','POST',{ clip_paths:clips, per:parseInt(document.getElementById('fd_per').value)||3,
+      concurrency:parseInt(document.getElementById('fd_conc').value)||2,
+      variants:parseInt(document.getElementById('fd_variants')?.value)||1,
+      prefix:'去重', out_dir:document.getElementById('fd_out').value.trim(), cfg });
+    document.getElementById('fdStatus').textContent='已开始，后台渲染中…';
+    startFdPoll();
+  }catch(e){ uiAlert(e.message); btn.disabled=false; btn.innerHTML=old; }
+}
+let fdTasks=[], fdtSel=new Set();
+function applyFdStatus(s){
+  document.getElementById('fdStatus').textContent=s.status||'';
+  const btn=document.getElementById('fdBtn'); if(btn){ btn.disabled=s.running; btn.textContent=s.running?'导出中…':'⚡ 开始去重导出'; }
+  const set=(id,t)=>{const e=document.getElementById(id); if(e) e.textContent=t;};
+  set('fdRun','处理 '+(s.counts?.running||0)); set('fdOk','成功 '+(s.counts?.done||0)); set('fdFail','失败 '+(s.counts?.failed||0));
+  fdTasks=s.tasks||[]; renderFdTasks();
+}
+async function refreshFdStatus(){ try{ applyFdStatus(await api('/api/ffdedup/status')); }catch(e){} }
+const FD_ST={running:['●','处理中','var(--acc2)'],done:['●','成功','var(--ok)'],failed:['●','失败','var(--red)'],cancelled:['●','已取消','#e8a23d']};
+function fdtRow(t){
+  const [dot,label,color]=FD_ST[t.status]||['●',t.status,'var(--sub)'];
+  const sel=fdtSel.has(t.id);
+  const reason=(t.status==='failed'&&t.err)?`<div style="color:var(--red);font-size:12px;margin-top:2px;word-break:break-all">原因: ${esc(t.err)}</div>`:'';
+  return `<div style="display:flex;gap:12px;align-items:center;padding:11px 4px;border-bottom:1px solid var(--line)">
+    <input type="checkbox" ${sel?'checked':''} onchange="fdtToggle('${t.id}')">
+    <div style="width:56px;height:75px;flex-shrink:0;border-radius:6px;overflow:hidden;background:#000">
+      <img loading="lazy" src="/api/channels/thumb?path=${encodeURIComponent(t.out||'')}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name||'')}</div>
+      <div style="font-size:12px;color:var(--sub);margin-top:2px">${esc(t.coll||'')} · ${t.eps||0}集${t.dur?(' · 时长 <b style="color:var(--fg)">'+esc(t.dur)+'</b>'):''} · <b style="color:${color}">${dot} ${label}</b>${t.fp!=null?(t.fp<8?` · <b style="color:var(--warn)" title="成品与原片感知指纹差异,低于8%建议加大去重强度">自检${t.fp}%⚠弱</b>`:` · <b style="color:var(--ok)" title="成品与原片感知指纹差异,越高改动越狠">自检${t.fp}%</b>`):''}</div>
+      ${reason}
+    </div>
+    <div style="width:150px;flex-shrink:0;font-size:12px;color:var(--sub);line-height:1.7">
+      <div>创建: ${esc((t.created||'').slice(5))}</div>
+      <div>${t.elapsed?('用时 '+esc(t.elapsed)):(t.done_at?('完成 '+esc(t.done_at.slice(5))):'-')}</div>
+      <div>${t.size_mb?t.size_mb+' MB':''}${t.dur?(' · '+esc(t.dur)):''}</div>
+    </div>
+  </div>`;
+}
+function renderFdTasks(){
+  const box=document.getElementById('fdTaskList'); if(!box) return;
+  const kw=(v('fdtSearch')||'').toLowerCase(), st=v('fdtStatus');
+  function v(id){const e=document.getElementById(id);return e?e.value.trim():'';}
+  let list=fdTasks.filter(t=>{
+    if(kw && !((t.name||'')+(t.coll||'')).toLowerCase().includes(kw)) return false;
+    if(st && t.status!==st) return false;
+    return true;
+  });
+  box.innerHTML=list.length?list.map(fdtRow).join(''):'<div style="padding:26px;text-align:center;color:var(--dim);font-size:13px">还没有去重任务。点上方「开始去重导出」，每条成品的成败会记录在这（失败带原因）</div>';
+  const n=document.getElementById('fdtSelN'); if(n) n.textContent=fdtSel.size;
+}
+function fdtToggle(id){ fdtSel.has(id)?fdtSel.delete(id):fdtSel.add(id); const n=document.getElementById('fdtSelN'); if(n)n.textContent=fdtSel.size; }
+async function fdtBulk(act){
+  if(!fdtSel.size){ uiAlert('先勾选任务'); return; }
+  const ids=[...fdtSel];
+  if(act==='delete'){ if(!await uiConfirm(`删除选中的 ${ids.length} 条记录？`,'删除'))return;
+    try{ await api('/api/ffdedup/tasks/delete','POST',{ids}); fdtSel.clear(); refreshFdStatus(); }catch(e){ uiAlert(e.message); } }
+}
+function startFdPoll(){
+  refreshFdStatus();
+  clearInterval(fdTimer);
+  fdTimer=setInterval(async()=>{
+    const pg=document.getElementById('page-ffd'); if(!(pg&&pg.classList.contains('on'))){ clearInterval(fdTimer); fdTimer=null; return; }
+    try{ const s=await api('/api/ffdedup/status'); applyFdStatus(s);
+      if(!s.running){
+        if(s.made&&s.made.length) document.getElementById('fdResult').innerHTML=`<div class="card" style="padding:14px 16px;border-color:var(--ok)">✅ 导出 ${s.made.length} 个成品 mp4，已在输出文件夹里，可直接发布。</div>`;
+        else if(s.error) document.getElementById('fdResult').innerHTML=`<div class="card" style="padding:14px 16px;border-color:var(--warn)">出错：${esc(s.error)}</div>`;
+      }
+    }catch(e){}
+  },2500);
+}
 async function runJy(btn){
   const tpl=document.getElementById('jyTemplate').value;
   if(!tpl){ uiAlert('先选一个模板草稿'); return; }
+  const manual=document.getElementById('jyFolder').value.trim();
+  const picked=jySelectedClipPaths();
+  if(!manual && !picked.length){ uiAlert('先在上面勾选素材文件夹（可多选），或手动指定一个文件夹'); return; }
+  const seq=document.getElementById('jySeq').checked;
   const body={
     template:tpl,
-    clips_folder:document.getElementById('jyFolder').value.trim(),
+    clips_folder:manual,               // 手动文件夹优先（填了就用它）
+    clip_paths:manual?[]:picked,       // 否则用勾选文件夹里的所有视频
+    sequential:seq,
     out_prefix:document.getElementById('jyPrefix').value.trim()||'混剪',
     count:parseInt(document.getElementById('jyCount').value)||1,
     mode:document.getElementById('jyMode').value,
-    n_clips:parseInt(document.getElementById('jyNClips').value)||5,
+    n_clips:seq?(parseInt(document.getElementById('jySeqN').value)||3):(parseInt(document.getElementById('jyNClips').value)||5),
     target_sec:parseInt(document.getElementById('jyTargetSec').value)||60,
     speed_min:parseFloat(document.getElementById('jySpeedMin').value)||1,
     speed_max:parseFloat(document.getElementById('jySpeedMax').value)||1,
@@ -1295,6 +1986,15 @@ function _grpVideos(videos){
   });
   return [...m.values()];
 }
+// 文件生成/修改日期(mtime 秒时间戳 → YYYY-MM-DD)
+function _fmtDate(ts){ if(!ts) return ''; const d=new Date(ts*1000); const p=n=>('0'+n).slice(-2); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+// 一组文件里最新的生成日期(带"最早~最新"跨度提示)
+function _grpDate(g){
+  const ts=(g.videos||[]).map(v=>v.mtime||0).filter(Boolean);
+  if(!ts.length) return '';
+  const mx=_fmtDate(Math.max(...ts)), mn=_fmtDate(Math.min(...ts));
+  return mx===mn?mx:(mn+'~'+mx);
+}
 function _folderVideos(videos, key){ return (videos||[]).filter(v=>_folderKey(v)===key); }
 // cfg = {onClick:'fn名', state:(g)=>'none'|'some'|'all'}  —— 点文件夹整包选/取消
 function vidFoldersHTML(videos, cfg){
@@ -1309,33 +2009,114 @@ function vidFoldersHTML(videos, cfg){
       <span class="foldcheck">✓</span>
       <div class="foldname">${esc(g.key)}</div>
       <div class="foldsub">${g.videos.length} 个视频${st==='some'?` · 选了 ${nsel}`:''}</div>
+      <div class="foldsub" style="color:var(--dim);font-size:11px">📅 ${_grpDate(g)||'—'}</div>
     </div>`;
   }).join('')}</div>`;
 }
 
 /* ---- 做剪映模版：深度参数 + 随机区间 + 素材库批量生成 ---- */
-let tplP=null, tplTimer=null;
+let tplTimer=null;
 // 通用：弹原生文件夹框，把路径填进 inputId；选完可选地回调
 async function pickFolderInto(inputId, cb){
   try{
-    const d=await api('/api/pick_folder','POST');
-    if(d && d.path){ document.getElementById(inputId).value=d.path; if(cb) cb(d.path); }
-  }catch(e){ uiAlert(e.message||'选择文件夹失败，可手动粘贴路径'); }
+    let path='';
+    if(window.electronAPI && window.electronAPI.pickFolder){   // Electron：用原生文件夹对话框
+      const r=await window.electronAPI.pickFolder();
+      path=(r&&r.path)||'';
+    }else{                                                     // 浏览器/pywebview 回退
+      const d=await api('/api/pick_folder','POST');
+      path=(d&&d.path)||'';
+    }
+    if(path){ const el=document.getElementById(inputId); el.value=path; syncPathShow(inputId); if(cb) cb(path); }
+  }catch(e){ uiAlert(e.message||'选择文件夹失败'); }
 }
-async function openTpl(){ await loadTplDrafts(); tplAutoRead(); }
-async function loadTplDrafts(){
+// 把隐藏输入的路径显示到旁边的 #{id}_show（选文件夹的行用）
+function syncPathShow(id){
+  const el=document.getElementById(id), show=document.getElementById(id+'_show');
+  if(!show) return;
+  const v=(el&&el.value||'').trim();
+  show.textContent = v || '未选择';
+  show.style.color = v ? 'var(--txt)' : 'var(--dim)';
+}
+// 固定基准草稿：特效/滤镜/调整/HSL 这些层只能从它取（带版本资源ID没法凭空造），写死不再让用户选
+const TPL_BASE='7月10日去重模板';
+async function openTpl(){ await checkTplInstall(); loadTplCfg(); }
+async function checkTplInstall(){
+  try{ const d=await api('/api/jy/drafts'); document.getElementById('tplNoInstall').style.display=d.installed?'none':'block'; }
+  catch(e){ document.getElementById('tplNoInstall').style.display='block'; }
+}
+
+/* ===== 蒙版设置：收集 / 保存 / 加载（自动持久化到 config） ===== */
+const _TPLC_IDS=['gDurMin',
+                 'bT_folder','bT_enable','bT_y','bT_x','bT_scale','bT_alpha_lo','bT_alpha_hi','bT_rotation','bT_mask_on','bT_mk_width','bT_mk_cx','bT_mk_cy','bT_mk_feather','bT_mk_invert',
+                 'bB_folder','bB_enable','bB_y','bB_x','bB_scale','bB_alpha_lo','bB_alpha_hi','bB_rotation','bB_mask_on','bB_mk_width','bB_mk_cx','bB_mk_cy','bB_mk_feather','bB_mk_invert',
+                 'bgm_enable','bgm_folder','bgm_vol_lo','bgm_vol_hi',
+                 'stk_enable','stk_folder','stk_count','stk_scale_lo','stk_scale_hi','stk_alpha_lo','stk_alpha_hi',
+                 'stk_pos_tl','stk_pos_tr','stk_pos_bl','stk_pos_br','stk_pos_center',
+                 'fx_enable','fx_str_lo','fx_str_hi','flt_enable','flt_val_lo','flt_val_hi',
+                 'adj_enable','adj_bri_lo','adj_bri_hi','adj_shp_lo','adj_shp_hi','adj_clr_lo','adj_clr_hi',
+                 'adj_con_lo','adj_con_hi','adj_sat_lo','adj_sat_hi','adj_hue'];
+function _band(prefix){
+  const g=id=>document.getElementById(prefix+'_'+id);
+  const n=id=>parseFloat(g(id).value)||0;
+  return {enable:g('enable').checked, folder:(g('folder').value||'').trim(),
+    y:n('y'), x:n('x'), scale:parseFloat(g('scale').value)||1,
+    alpha:[parseFloat(g('alpha_lo').value)||0.6, parseFloat(g('alpha_hi').value)||0.8],
+    rotation:n('rotation'), mask_on:g('mask_on').checked,
+    mask:{width:parseFloat(g('mk_width').value)||0.28, centerX:n('mk_cx'), centerY:n('mk_cy'),
+          feather:parseFloat(g('mk_feather').value)||1, invert:g('mk_invert').checked}};
+}
+function tplBands(){ return {top:_band('bT'), bottom:_band('bB')}; }
+// 收集所有大项(全局时长/BGM/贴纸/特效/滤镜/调节)成引擎 cfg 片段
+function _num(id,dflt){ const e=document.getElementById(id); const v=parseFloat(e&&e.value); return isNaN(v)?dflt:v; }
+function _on(id){ const e=document.getElementById(id); return e?e.checked:false; }
+function tplSections(){
+  return {
+    global:{duration_min:_num('gDurMin',15)},
+    bgm:{enable:_on('bgm_enable'), folder:(document.getElementById('bgm_folder').value||'').trim(),
+         volume:[_num('bgm_vol_lo',0.1),_num('bgm_vol_hi',0.22)]},
+    stickers:{enable:_on('stk_enable'), folder:(document.getElementById('stk_folder').value||'').trim(),
+              count:_num('stk_count',2), scale:[_num('stk_scale_lo',0.2),_num('stk_scale_hi',0.4)],
+              alpha:[_num('stk_alpha_lo',0.03),_num('stk_alpha_hi',0.05)],
+              positions:['tl','tr','bl','br','center'].filter(k=>_on('stk_pos_'+k))},
+    fx:{enable:_on('fx_enable'), strength:[_num('fx_str_lo',0.42),_num('fx_str_hi',0.60)]},
+    filter:{enable:_on('flt_enable'), value:[_num('flt_val_lo',0.35),_num('flt_val_hi',0.52)]},
+    adjust:{enable:_on('adj_enable'), brightness:[_num('adj_bri_lo',0.12),_num('adj_bri_hi',0.24)],
+            sharpen:[_num('adj_shp_lo',0.02),_num('adj_shp_hi',0.09)], clear:[_num('adj_clr_lo',0.02),_num('adj_clr_hi',0.08)],
+            contrast:[_num('adj_con_lo',-0.06),_num('adj_con_hi',0.06)], saturation:[_num('adj_sat_lo',-0.06),_num('adj_sat_hi',0.06)],
+            hue_jitter:_num('adj_hue',6)}
+  };
+}
+let _tplSaveTimer=null;
+function _collectTplVals(){
+  const vals={};
+  _TPLC_IDS.forEach(id=>{ const e=document.getElementById(id); if(e) vals[id]=(e.type==='checkbox')?e.checked:e.value; });
+  vals._prefix=document.getElementById('tplPrefix').value;
+  vals._count=document.getElementById('tplCount').value;
+  return vals;
+}
+// 自动保存（改动后 400ms 静默存，无提示）
+function saveTplCfg(){
+  clearTimeout(_tplSaveTimer);
+  _tplSaveTimer=setTimeout(async()=>{ try{ await api('/api/jy/tpl_cfg','POST',{cfg:_collectTplVals()}); }catch(e){} },400);
+}
+// 手动保存（点按钮：立即存 + 弹提示）
+async function saveTplCfgNow(btn){
+  const old=btn?btn.innerHTML:''; if(btn){ btn.disabled=true; btn.textContent='保存中…'; }
+  clearTimeout(_tplSaveTimer);
+  try{ await api('/api/jy/tpl_cfg','POST',{cfg:_collectTplVals()}); toast('✅ 设置已保存，下次打开软件自动带上'); }
+  catch(e){ uiAlert(e.message||'保存失败'); }
+  if(btn){ btn.disabled=false; btn.innerHTML=old; }
+}
+async function loadTplCfg(){
   try{
-    const d=await api('/api/jy/drafts');
-    document.getElementById('tplNoInstall').style.display=d.installed?'none':'block';
-    const sel=document.getElementById('tplBase');
-    sel.innerHTML=(d.drafts||[]).map(x=>`<option>${esc(x.name)}</option>`).join('')||'<option>（剪映里还没有草稿）</option>';
-    sel.onchange=tplAutoRead;                       // 换草稿自动重读参数
-  }catch(e){ document.getElementById('tplNoInstall').style.display='block'; }
-}
-async function tplAutoRead(){                        // 进页面/换草稿：不用点按钮，直接读
-  const box=document.getElementById('tplPanels');
-  box.innerHTML='<div class="empty" style="padding:24px">正在读取模板参数…</div>';
-  await readTplParams({innerHTML:'',disabled:false}, true);
+    const d=await api('/api/jy/tpl_cfg');
+    const v=(d&&d.cfg)||{};
+    _TPLC_IDS.forEach(id=>{ const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; } });
+    if(v._prefix) document.getElementById('tplPrefix').value=v._prefix;
+    if(v._count) document.getElementById('tplCount').value=v._count;
+    ['bT_folder','bB_folder','bgm_folder','stk_folder'].forEach(syncPathShow);   // 刷新路径显示
+  }catch(e){}
 }
 // 随机区间输入对：返回HTML；collect 时读 .tplr[data-k=key] 的两个 input
 function rng(key,lo,hi,step,unit){
@@ -1352,194 +2133,19 @@ const _r2=v=>Math.round((v??0)*100)/100;
 const _lohi=(v,pct,min,max)=>{ v=v??0.5; let lo=v*(1-pct), hi=v*(1+pct);
   return [_r2(Math.max(min??0,lo)), _r2(Math.min(max??1,hi))]; };
 
-async function readTplParams(btn, silent){
-  const base=document.getElementById('tplBase').value;
-  if(!base) return;
-  const old=btn.innerHTML; btn.disabled=true; btn.textContent='读取中…';
-  try{
-    const d=await api('/api/jy/template_params?name='+encodeURIComponent(base));
-    tplP=d;
-    renderTplPanels(d);
-    document.getElementById('tplGenCard').style.display='block';
-    document.getElementById('tplBtn').disabled=false;
-    document.getElementById('tplStatus').textContent='';
-  }catch(e){
-    if(silent) document.getElementById('tplPanels').innerHTML=emptyBox('⚠','读取模板参数失败',e.message||'');
-    else uiAlert(e.message);
-  }
-  btn.disabled=false; btn.innerHTML=old;
-}
-
-function renderTplPanels(d){
-  const box=document.getElementById('tplPanels');
-  let html='';
-  // —— 主内容全局：条数/变速 ——
-  html+=`<div class="card" style="padding:16px 18px;margin-bottom:16px">
-    <div style="font-weight:800;font-size:15px;margin-bottom:6px">🎬 主内容抽取</div>
-    <div class="setrow" style="padding:10px 0">
-      <div class="l"><div class="t">每个草稿装多少</div></div>
-      <select id="tplMode"><option value="count">固定条数</option><option value="duration">按时长填满</option></select>
-      <span>条数 <input type="number" id="tplNClips" value="5" min="1" max="50" style="width:62px;padding:5px 7px"></span>
-      <span>或时长 <input type="number" id="tplTargetSec" value="60" min="5" step="5" style="width:70px;padding:5px 7px"> 秒</span>
-    </div>
-    <div class="setrow" style="padding:10px 0">
-      <div class="l"><div class="t">随机变速</div><div class="d">每个片段在区间里随机取速</div></div>
-      ${rng('speed',0.9,1.1,0.01,' 倍')}
-    </div>
-  </div>`;
-
-  // —— 每个视频层一张卡 ——
-  const ACT={main:'主内容(素材库拼接)',overlay:'叠加层(素材库随机1条)',keep:'保留模板原样',drop:'去掉'};
-  html+=(d.video_layers||[]).map(L=>{
-    const info=[`内部视频 ${L.inner_videos}`, L.inner_stickers?`贴纸 ${L.inner_stickers}`:'',
-      L.masks&&L.masks[0]?`蒙版「${L.masks[0].name}」宽${_r2(L.masks[0].width)} 羽化${_r2(L.masks[0].feather)}`:''].filter(Boolean).join(' · ');
-    const guess=L.role_guess==='sticker'?'keep':L.role_guess;
-    const aLo=_lohi(L.alpha,0.4,0.01,1);
-    const mk=L.masks&&L.masks[0]||{};
-    return `<div class="card tplLayer" data-idx="${L.index}" style="padding:16px 18px;margin-bottom:16px">
-      <div style="font-weight:800;font-size:15px;margin-bottom:2px">📼 视频层 · ${esc(L.label)}
-        <span style="color:var(--dim);font-weight:400;font-size:12px">轨道${L.index} · 透明度${_r2(L.alpha)} · ${info}</span></div>
-      <div class="setrow" style="padding:10px 0">
-        <div class="l"><div class="t">这层怎么处理</div></div>
-        <select class="tplAct" onchange="tplActChange(this)">${Object.entries(ACT).map(([k,v])=>`<option value="${k}" ${k===guess?'selected':''}>${v}</option>`).join('')}</select>
-      </div>
-      <div class="tplSubMain" style="display:none">
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">缩放</div></div>${rng('scale',1.0,1.05,0.01,' 倍')}</div>
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">镜像概率</div><div class="d">整个草稿按这个概率水平翻转</div></div>
-          <input type="number" class="tplFlip" value="0.5" min="0" max="1" step="0.1" style="width:66px;padding:5px 7px"></div>
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">原声音量</div><div class="d">模板里是 ${L.volume==null?'—':_r2(L.volume)}</div></div>${rng('volume',0,0,0.01)}</div>
-      </div>
-      <div class="tplSubOv" style="display:none">
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">透明度</div></div>${rng('alpha',aLo[0],aLo[1])}</div>
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">缩放</div></div>${rng('scale',1.0,1.2,0.01,' 倍')}</div>
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">位置偏移 X / Y</div></div>${rng('tx',-0.1,0.1)} ${rng('ty',-0.1,0.1)}</div>
-        <div class="setrow" style="padding:10px 0">
-          <div class="l"><div class="t">蒙版</div><div class="d">${mk.name?`克隆模板的「${mk.name}」蒙版，参数在区间里随机`:'模板里没读到蒙版原型，开了也没效果'}</div></div>
-          <label class="switch"><input type="checkbox" class="tplMaskOn" ${mk.name?'checked':''}><span class="slider"></span></label>
-          <span>宽 ${rng('mk_width',_lohi(mk.width??0.3,0.3,0.05,1)[0],_lohi(mk.width??0.3,0.3,0.05,1)[1])}</span>
-          <span>羽化 ${rng('mk_feather',_lohi(mk.feather??0.5,0.3,0,1)[0],_lohi(mk.feather??0.5,0.3,0,1)[1])}</span>
-        </div>
-      </div>
-      <div class="tplSubKeep" style="display:none">
-        <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">外层透明度随机</div><div class="d">模板值 ${_r2(L.alpha)}，留空区间=不动</div></div>${rng('alpha',aLo[0],aLo[1])}</div>
-      </div>
-    </div>`;
-  }).join('');
-
-  // —— 特效 / 滤镜 ——
-  html+=(d.effects||[]).map(E=>{
-    const v=(E.adjust_params&&E.adjust_params[0]&&E.adjust_params[0].value)??E.value??0.5;
-    const [lo,hi]=_lohi(v,0.3,0,1);
-    return `<div class="card tplFx" data-idx="${E.index}" style="padding:16px 18px;margin-bottom:16px">
-      <div style="font-weight:800;font-size:15px;margin-bottom:2px">✨ 特效 · ${esc(E.name)} <span style="color:var(--dim);font-weight:400;font-size:12px">模板强度 ${_r2(v)}</span></div>
-      <div class="setrow" style="padding:10px 0">
-        <div class="l"><div class="t">保留</div></div><label class="switch"><input type="checkbox" class="tplOn" checked><span class="slider"></span></label>
-        <span>强度 ${rng('value',lo,hi)}</span></div></div>`;
-  }).join('');
-  html+=(d.filters||[]).map(F=>{
-    const [lo,hi]=_lohi(F.value??0.5,0.3,0,1);
-    return `<div class="card tplFl" data-idx="${F.index}" style="padding:16px 18px;margin-bottom:16px">
-      <div style="font-weight:800;font-size:15px;margin-bottom:2px">🎨 滤镜 · ${esc(F.name)} <span style="color:var(--dim);font-weight:400;font-size:12px">模板值 ${_r2(F.value)}</span></div>
-      <div class="setrow" style="padding:10px 0">
-        <div class="l"><div class="t">保留</div></div><label class="switch"><input type="checkbox" class="tplOn" checked><span class="slider"></span></label>
-        <span>强度 ${rng('value',lo,hi)}</span></div></div>`;
-  }).join('');
-
-  // —— 调整（逐项区间） ——
-  const CN={brightness:'亮度',contrast:'对比度',saturation:'饱和度',sharpen:'锐化',clear:'清晰',particle:'颗粒',temperature:'色温',tone:'色调',fade:'褪色',highlight:'高光',shadow:'阴影',vignetting:'暗角'};
-  html+=(d.adjusts||[]).map(A=>`<div class="card tplAdj" data-idx="${A.index}" style="padding:16px 18px;margin-bottom:16px">
-    <div style="font-weight:800;font-size:15px;margin-bottom:2px">🎛 调整 · ${esc(A.label)}</div>
-    <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">保留</div></div><label class="switch"><input type="checkbox" class="tplOn" checked><span class="slider"></span></label></div>
-    ${(A.params||[]).map(p=>{const [lo,hi]=_lohi(p.value??0.1,0.35,0,1);
-      return `<div class="setrow" style="padding:8px 0"><div class="l"><div class="t">${CN[p.type]||p.type} <span style="color:var(--dim);font-weight:400;font-size:12px">模板 ${_r2(p.value)}</span></div></div>${rng('p_'+p.type,lo,hi)}</div>`;}).join('')}
-  </div>`).join('');
-
-  // —— BGM ——
-  html+=(d.audios||[]).map(A=>{
-    const [lo,hi]=_lohi(A.volume??0.17,0.3,0,1);
-    return `<div class="card tplBgm" data-idx="${A.index}" style="padding:16px 18px;margin-bottom:16px">
-      <div style="font-weight:800;font-size:15px;margin-bottom:2px">🎵 背景音乐 <span style="color:var(--dim);font-weight:400;font-size:12px">模板「${esc(A.name)}」音量${_r2(A.volume)} 循环${A.loops}遍</span></div>
-      <div class="setrow" style="padding:10px 0">
-        <div class="l"><div class="t">怎么处理</div><div class="d">素材库随机=从素材库音乐里每个草稿随机选一首循环铺满</div></div>
-        <select class="tplBgmAct"><option value="lib">素材库随机</option><option value="keep">保留模板音乐</option><option value="drop">去掉</option></select>
-        <span>音量 ${rng('bgm_vol',lo,hi)}</span></div></div>`;
-  }).join('');
-
-  // —— 追加叠加层 ——
-  html+=`<div class="card" id="tplExtra" style="padding:16px 18px;margin-bottom:16px">
-    <div style="font-weight:800;font-size:15px;margin-bottom:2px">➕ 追加叠加层 <span style="color:var(--dim);font-weight:400;font-size:12px">次轨道再加几层素材库视频当干扰</span></div>
-    <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">加几层</div></div>
-      <input type="number" id="tplExtraN" value="0" min="0" max="6" style="width:62px;padding:5px 7px"> 层</div>
-    <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">透明度 / 缩放</div></div>${rng('x_alpha',0.03,0.09)} ${rng('x_scale',1.0,1.3,0.01,' 倍')}</div>
-    <div class="setrow" style="padding:10px 0"><div class="l"><div class="t">位置偏移 X / Y</div></div>${rng('x_tx',-0.15,0.15)} ${rng('x_ty',-0.15,0.15)}</div>
-  </div>`;
-
-  box.innerHTML=html;
-  box.querySelectorAll('.tplAct').forEach(s=>tplActChange(s));
-}
-function tplActChange(sel){
-  const card=sel.closest('.tplLayer');
-  card.querySelector('.tplSubMain').style.display=sel.value==='main'?'block':'none';
-  card.querySelector('.tplSubOv').style.display=sel.value==='overlay'?'block':'none';
-  card.querySelector('.tplSubKeep').style.display=sel.value==='keep'?'block':'none';
-}
-
-function collectTplCfg(){
-  const P=document.getElementById('tplPanels');
-  const layers={};
-  P.querySelectorAll('.tplLayer').forEach(card=>{
-    const idx=card.dataset.idx, act=card.querySelector('.tplAct').value;
-    const o={action:act};
-    if(act==='main'){
-      const b=card.querySelector('.tplSubMain');
-      o.scale=rngVal(b,'scale'); o.volume=rngVal(b,'volume');
-      o.flip_prob=parseFloat(card.querySelector('.tplFlip').value)||0;
-    }else if(act==='overlay'){
-      const b=card.querySelector('.tplSubOv');
-      o.alpha=rngVal(b,'alpha'); o.scale=rngVal(b,'scale'); o.tx=rngVal(b,'tx'); o.ty=rngVal(b,'ty');
-      o.mask_on=card.querySelector('.tplMaskOn').checked;
-      o.mask={width:rngVal(b,'mk_width'), feather:rngVal(b,'mk_feather')};
-    }else if(act==='keep'){
-      o.alpha=rngVal(card.querySelector('.tplSubKeep'),'alpha');
-    }
-    layers[idx]=o;
-  });
-  P.querySelectorAll('.tplFx').forEach(c=>{
-    layers[c.dataset.idx]=c.querySelector('.tplOn').checked?{value:rngVal(c,'value')}:{action:'drop'};});
-  P.querySelectorAll('.tplFl').forEach(c=>{
-    layers[c.dataset.idx]=c.querySelector('.tplOn').checked?{value:rngVal(c,'value')}:{action:'drop'};});
-  P.querySelectorAll('.tplAdj').forEach(c=>{
-    if(!c.querySelector('.tplOn').checked){ layers[c.dataset.idx]={action:'drop'}; return; }
-    const params={};
-    c.querySelectorAll('.tplr').forEach(r=>{ if(r.dataset.k.startsWith('p_')) params[r.dataset.k.slice(2)]=rngVal(c,r.dataset.k); });
-    layers[c.dataset.idx]={params};
-  });
-  let bgm={enable:false};
-  P.querySelectorAll('.tplBgm').forEach(c=>{
-    const act=c.querySelector('.tplBgmAct').value;
-    if(act==='drop') layers[c.dataset.idx]={action:'drop'};
-    else if(act==='lib') bgm={enable:true, volume:rngVal(c,'bgm_vol')};
-  });
-  const ex=document.getElementById('tplExtra');
-  return {
-    library:document.getElementById('tplLib').value.trim(),
-    mode:document.getElementById('tplMode').value,
-    n_clips:parseInt(document.getElementById('tplNClips').value)||5,
-    target_sec:parseInt(document.getElementById('tplTargetSec').value)||60,
-    speed:rngVal(P,'speed')||[0.9,1.1],
-    layers, bgm,
-    extra_overlays:{count:parseInt(document.getElementById('tplExtraN').value)||0,
-      alpha:rngVal(ex,'x_alpha'), scale:rngVal(ex,'x_scale'), tx:rngVal(ex,'x_tx'), ty:rngVal(ex,'x_ty')}
-  };
-}
 
 async function runTplGen(btn){
-  if(!tplP) return;
-  const cfg=collectTplCfg();
-  if(!cfg.library){ uiAlert('先填素材库文件夹'); return; }
+  const cfg={bands:tplBands(), layers:{}, n_clips:1, ...tplSections()};
+  // 校验：启用的层必须各自选好素材文件夹
+  if(cfg.bands.top.enable && !cfg.bands.top.folder){ uiAlert('「上方视频」已启用，请先选它的素材文件夹'); return; }
+  if(cfg.bands.bottom.enable && !cfg.bands.bottom.folder){ uiAlert('「下方视频」已启用，请先选它的素材文件夹'); return; }
+  if(cfg.bgm.enable && !cfg.bgm.folder){ uiAlert('「背景音乐」已启用，请先选音乐文件夹（或关掉背景音乐）'); return; }
+  if(cfg.stickers.enable && !cfg.stickers.folder){ uiAlert('「贴纸」已启用，请先选贴纸图片文件夹（或关掉贴纸）'); return; }
+  if(!cfg.bands.top.enable && !cfg.bands.bottom.enable){ uiAlert('上下方视频至少启用一个'); return; }
+  saveTplCfg();
   const old=btn.innerHTML; btn.disabled=true; btn.textContent='生成中…';
   try{
-    await api('/api/jy/compose2','POST',{template:tplP.name, out_prefix:document.getElementById('tplPrefix').value||'去重',
+    await api('/api/jy/compose2','POST',{template:TPL_BASE, out_prefix:document.getElementById('tplPrefix').value||'去重',
       count:parseInt(document.getElementById('tplCount').value)||1, cfg});
     document.getElementById('tplStatus').textContent='已开始，后台生成中…';
     clearInterval(tplTimer);
@@ -1642,18 +2248,22 @@ async function ddClear(){ try{ await api('/api/dedup/clear','POST'); loadDedupTa
 
 /* ---- 视频号发布 ---- */
 let chVideos=[], chPick=[], chTimer=null, chOpen=new Set();
-function openChannels(){ chFn('accounts'); loadChVideos(); startChannelsPoll(); }
+function openChannels(){ chFn('accounts'); loadChVideos(); startChannelsPoll(); loadChConc(); }
+async function loadChConc(){ try{ const r=await api('/api/channels/pubsettings'); const el=document.getElementById('chMaxConc'); if(el&&r.max_concurrent) el.value=r.max_concurrent; }catch(e){} }
+let _chConcT=null;
+function saveChConc(){ clearTimeout(_chConcT); _chConcT=setTimeout(async()=>{ try{ const n=Math.max(1,Math.min(20,parseInt(document.getElementById('chMaxConc').value)||3)); await api('/api/channels/pubsettings','POST',{max_concurrent:n}); }catch(e){} },400); }
 function chFn(fn){
   document.querySelectorAll('#page-channels .jvtab').forEach(t=>t.classList.toggle('on',t.dataset.fn===fn));
-  document.getElementById('fn-accounts').style.display=fn==='accounts'?'block':'none';
+  document.getElementById('fn-accounts').style.display=fn==='accounts'?'flex':'none';
   document.getElementById('fn-publish').style.display=fn==='publish'?'block':'none';
   if(fn==='publish'){ if(!chVideos.length) loadChVideos(); chPreview(); }
 }
 function chSub(sub){
   document.querySelectorAll('#fn-publish .jvsub').forEach(a=>a.classList.toggle('on',a.dataset.sub===sub));
   document.querySelectorAll('#fn-publish .jvview').forEach(v=>v.style.display='none');
-  const el=document.getElementById('jv-'+sub); if(el) el.style.display=sub==='publish'?'flex':'block';
+  const el=document.getElementById('jv-'+sub); if(el) el.style.display=(sub==='publish'||sub==='tasks')?'flex':'block';
   if(sub==='drafts') loadDraftList();
+  if(sub==='tasks') refreshChannels();
 }
 
 /* ===== 仿小V猫 批量发视频 交互 ===== */
@@ -1688,8 +2298,8 @@ function xvTime(mode){
 }
 function xvDist(mode){
   document.getElementById('chDistribute').value=mode;
-  document.getElementById('xvDistLbl').textContent={multi:'多对一',one2one:'一对一',even:'均分'}[mode];
-  ['multi','one2one','even'].forEach(m=>document.getElementById('xvdm-'+m).classList.toggle('on',m===mode));
+  document.getElementById('xvDistLbl').textContent={multi:'多对一',one2one:'一对一',even:'均分',folder:'按文件夹一对一'}[mode];
+  ['multi','one2one','even','folder'].forEach(m=>{const e=document.getElementById('xvdm-'+m); if(e) e.classList.toggle('on',m===mode);});
   document.getElementById('xvEvenPanel').style.display=(mode==='even')?'block':'none';
   xvDrawDiagram(); chPreview();
 }
@@ -1703,9 +2313,10 @@ function xvDrawDiagram(){
   let n=3, arrows='';
   if(mode==='multi'){ for(let i=0;i<3;i++) arrows+=arr(i,0,'#e0554e')+arr(i,1,'#3f8fe0'); }
   else if(mode==='one2one'){ arrows=arr(0,0,'#e0554e')+arr(1,1,'#3f8fe0')+arr(2,0,'#e0554e'); }
+  else if(mode==='folder'){ n=4; arrows=arr(0,0,'#e0554e')+arr(1,0,'#e0554e')+arr(2,1,'#3f8fe0')+arr(3,1,'#3f8fe0'); }
   else { n=4; arrows=arr(0,0,'#e0554e')+arr(1,0,'#e0554e')+arr(2,1,'#3f8fe0')+arr(3,1,'#3f8fe0'); }
   let files=''; for(let i=0;i<n;i++) files+=fbox(i);
-  const desc={multi:'每条视频都发给所有勾选账号',one2one:'视频平摊到各账号，各不重复',even:'每号一天 N 条，发不完滚到明天'}[mode];
+  const desc={multi:'每条视频都发给所有勾选账号',one2one:'视频平摊到各账号，各不重复',even:'每号一天 N 条，发不完滚到明天',folder:'剧文件夹1→账号1、文件夹2→账号2…每号发自己的剧(按集数顺序)'}[mode];
   box.innerHTML=`<svg width="100%" viewBox="0 0 320 ${n>=4?152:132}" style="max-width:330px;display:block;margin:0 auto">
     <defs><marker id="tri" markerWidth="8" markerHeight="8" refX="5.5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8a8f9a"/></marker></defs>
     ${files}${abox(0)}${abox(1)}${arrows}</svg>
@@ -1722,22 +2333,57 @@ function xvAddMenu(el){
   let m=document.getElementById('xvAddMenuEl');
   if(m){ m.remove(); return; }
   m=document.createElement('div'); m.id='xvAddMenuEl'; m.className='xvmenu'; m.style.display='block';
-  m.innerHTML=`<a onclick="xvAddClose();document.getElementById('chLibWrap').style.display='block';loadChVideos()">从下载库选择</a>
+  m.innerHTML=`<a onclick="xvAddClose();document.getElementById('chLibWrap').style.display='block';loadChVideos()">从导出目录选择</a>
     <a onclick="xvAddClose();xvPickFiles()">选择文件添加</a>
     <a onclick="xvAddClose();xvPickDir()">选择目录添加</a>`;
   document.body.appendChild(m);
   const r=el.getBoundingClientRect(); m.style.position='fixed'; m.style.left=r.left+'px'; m.style.top=(r.bottom+5)+'px';
 }
 function xvAddClose(){ const m=document.getElementById('xvAddMenuEl'); if(m) m.remove(); }
+// 去重成品输出目录（“添加视频”默认定位到这里，方便直接拿去重成品发布）
+// 优先用“一键去重导出”页设的“导出到”(fd_out)，与成品实际落地一致
+async function _xvOutDir(){
+  const el=document.getElementById('fd_out');
+  if(el&&el.value&&el.value.trim()) return el.value.trim();
+  try{ const d=await api('/api/ffdedup/outdir'); if(d&&d.path) return d.path; }catch(e){}
+  return '';
+}
 async function xvPickFiles(){
-  try{ const d=await api('/api/channels/pick_videos','POST'); if(d&&d.paths) xvAddPaths(d.paths); }catch(e){ uiAlert(e.message); }
+  try{
+    if(window.electronAPI&&electronAPI.pickFiles){
+      const r=await electronAPI.pickFiles(await _xvOutDir());
+      if(r&&r.paths&&r.paths.length) xvAddPaths(r.paths); return;
+    }
+    const d=await api('/api/channels/pick_videos','POST'); if(d&&d.paths) xvAddPaths(d.paths);
+  }catch(e){ uiAlert(e.message); }
 }
 async function xvPickDir(){
-  try{ const d=await api('/api/channels/pick_video_dir','POST'); if(d&&d.paths) xvAddPaths(d.paths); }catch(e){ uiAlert(e.message); }
+  try{
+    if(window.electronAPI&&electronAPI.pickVideoDir){
+      const r=await electronAPI.pickVideoDir(await _xvOutDir());
+      if(r&&r.paths&&r.paths.length) xvAddPaths(r.paths);
+      else if(r&&!r.paths.length) uiAlert('该目录没有扫到视频');
+      return;
+    }
+    const d=await api('/api/channels/pick_video_dir','POST'); if(d&&d.paths) xvAddPaths(d.paths);
+  }catch(e){ uiAlert(e.message); }
+}
+// 默认标题/话题模板（每条视频卡可单独改，批量操作可统一改）
+const XV_DEF_TITLE='点击❤左下角【免费剧集】，不花一分钱看全集';
+const XV_DEF_TAGS=['热门漫剧','这个结局太爽了','影视综艺','免费漫剧'];
+function xvEpNum(name){ // 从文件名提取集数："xx_第3-4集"→3、"7.mp4"→7,没有数字排最后
+  const m=name.match(/第\s*(\d+)/)||name.match(/^(\d+)/)||name.match(/(\d+)/);
+  return m?parseInt(m[1]):1e9;
 }
 function xvAddPaths(paths){
   (paths||[]).forEach(p=>{ const name=p.split(/[\\/]/).pop();
-    if(!chPick.find(x=>x.path===p)) chPick.push({path:p,name,title:name.replace(/\.[^.]+$/,'').slice(0,16)}); });
+    if(!chPick.find(x=>x.path===p)) chPick.push({path:p,name,title:XV_DEF_TITLE}); });
+  // 按(剧文件夹, 集数)自然排序：第1-2集永远排最前，发布顺序=列表顺序
+  chPick.sort((a,b)=>{
+    const fa=a.path.split(/[\\/]/).slice(-2,-1)[0]||'', fb=b.path.split(/[\\/]/).slice(-2,-1)[0]||'';
+    if(fa!==fb) return fa.localeCompare(fb,'zh');
+    return xvEpNum(a.name)-xvEpNum(b.name);
+  });
   renderPickList(); chPreview();
 }
 
@@ -1833,9 +2479,11 @@ async function loadChVideos(){
   const grid=document.getElementById('chVideoGrid');
   grid.innerHTML='<div class="empty" style="padding:24px">加载中…</div>';
   try{
-    const d=await api('/api/channels/videos');
+    const d=await api('/api/ffdedup/videos');   // 导出目录里的去重成品(按合集子文件夹分组)
     chVideos=d.videos||[];
-    document.getElementById('chVidMeta').textContent='下载库共 '+chVideos.length+' 个视频';
+    const meta=document.getElementById('chVidMeta');
+    if(meta) meta.textContent='导出目录共 '+chVideos.length+' 个成品'+(d.root?(' · '+d.root):'');
+    if(!chVideos.length){ grid.innerHTML=emptyBox('📂','导出目录还没有成品','先去「一键去重导出」跑一遍，成品会按合集名分文件夹存到导出目录'); return; }
     renderChVideoGrid();
   }catch(e){ grid.innerHTML=emptyBox('⚠','加载失败',e.message); }
 }
@@ -1854,14 +2502,14 @@ function toggleChFolder(key){
   vids.forEach(v=>{
     const i=chPick.findIndex(p=>p.path===v.path);
     if(allSel){ if(i>=0) chPick.splice(i,1); }
-    else if(i<0){ chPick.push({path:v.path, name:v.name, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)}); }
+    else if(i<0){ chPick.push({path:v.path, name:v.name, size:v.size, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)}); }
   });
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function') chPreview();
 }
 function toggleChVid(v){
   const i=chPick.findIndex(p=>p.path===v.path);
   if(i>=0) chPick.splice(i,1);
-  else chPick.push({path:v.path, name:v.name, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)});
+  else chPick.push({path:v.path, name:v.name, size:v.size, title:v.name.replace(/\.[^.]+$/,'').slice(0,30)});
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview();
 }
 function coverUrl(p){ return '/api/localimg?path='+encodeURIComponent(p); }
@@ -1871,46 +2519,81 @@ function renderPickList(){
   const wc=document.getElementById('xvWorkCount'); if(wc) wc.textContent=chPick.length;
   const cw=document.getElementById('xvClearWork'); if(cw) cw.textContent=chPick.length;
   const drop=document.getElementById('chDrop'); if(drop) drop.style.display=chPick.length?'none':'block';
-  document.getElementById('chPickList').innerHTML=chPick.map((p,i)=>`
-    <div class="card" style="padding:12px 14px">
-      <div style="display:flex;gap:12px">
-        <div style="width:80px;flex-shrink:0">
-          <div style="width:80px;height:106px;border-radius:8px;background:#eceef5;overflow:hidden;position:relative">
-            ${p.cover?`<img src="${coverUrl(p.cover)}" style="width:100%;height:100%;object-fit:cover">`:`<div style="display:grid;place-items:center;height:100%;font-size:26px;color:var(--dim)">🎬</div>`}
-            <span style="position:absolute;top:3px;left:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:5px">第${i+1}篇</span>
+  const onC='color:var(--acc2);border-bottom:2px solid var(--acc)';
+  const offC='color:var(--sub);border-bottom:2px solid transparent';
+  document.getElementById('chPickList').innerHTML=chPick.map((p,i)=>{
+    const isCommon=p._tab==='common';
+    return `
+    <div class="card" style="padding:16px 18px;position:relative">
+      <button class="x" onclick="removePick(${i})" style="position:absolute;top:12px;right:14px">✕</button>
+      <div style="display:flex;gap:18px">
+        <!-- 左：视频缩略图（真实首帧） -->
+        <div style="width:152px;flex-shrink:0">
+          <div style="width:152px;height:202px;border-radius:9px;background:#000;overflow:hidden;position:relative">
+            <img src="/api/channels/thumb?path=${encodeURIComponent(p.path)}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+            <div style="display:none;place-items:center;height:100%;font-size:34px;color:#888">🎬</div>
+            <span style="position:absolute;top:6px;left:7px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;padding:2px 8px;border-radius:6px">第${i+1}篇</span>
           </div>
-          <div style="display:flex;gap:3px;margin-top:5px">
-            <button class="btn ghost" style="padding:3px 6px;font-size:11px;flex:1" onclick="chCapMenu(${i})">截帧</button>
-            <button class="btn ghost" style="padding:3px 6px;font-size:11px;flex:1" onclick="chPickCover(${i})">上传</button>
+          <div style="display:flex;gap:14px;justify-content:center;margin-top:8px;font-size:12.5px">
+            <a onclick="chCapMenu(${i})" style="color:var(--acc2);cursor:pointer">截帧</a>
+            <a onclick="xvReplaceVideo(${i})" style="color:var(--acc2);cursor:pointer">替换视频</a>
           </div>
+          <div style="margin-top:7px;color:var(--dim);font-size:11px;word-break:break-all;line-height:1.45" title="${esc(p.path)}">${esc(p.path)}</div>
+          ${p.size?`<div style="color:var(--sub);font-size:11px;margin-top:3px">${p.size} MB</div>`:''}
         </div>
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-          <div style="display:flex;gap:12px;border-bottom:1px solid var(--line);margin-bottom:2px">
-            <span class="ct ${p._tab==='common'?'':'on'}" data-tab="channels" onclick="cardTab(${i},'channels')" style="padding:4px 2px;cursor:pointer;font-size:13px;font-weight:600;color:${p._tab==='common'?'var(--sub)':'var(--acc2)'};border-bottom:2px solid ${p._tab==='common'?'transparent':'var(--acc)'}">视频号</span>
-            <span class="ct ${p._tab==='common'?'on':''}" data-tab="common" onclick="cardTab(${i},'common')" style="padding:4px 2px;cursor:pointer;font-size:13px;font-weight:600;color:${p._tab==='common'?'var(--acc2)':'var(--sub)'};border-bottom:2px solid ${p._tab==='common'?'var(--acc)':'transparent'}">通用</span>
+        <!-- 右：平台内容 -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <div style="display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:14px">
+            <span class="ct" data-tab="channels" onclick="cardTab(${i},'channels')" style="padding:6px 2px;cursor:pointer;font-size:13.5px;font-weight:600;${isCommon?offC:onC}">视频号</span>
+            <span class="ct" data-tab="common" onclick="cardTab(${i},'common')" style="padding:6px 2px;cursor:pointer;font-size:13.5px;font-weight:600;${isCommon?onC:offC}">通用</span>
           </div>
-          <div class="ct-channels" style="display:${p._tab==='common'?'none':'flex'};flex-direction:column;gap:6px">
-            <input value="${esc(p.title||'')}" oninput="chPick[${i}].title=this.value" maxlength="16" placeholder="短标题（建议6-16字）" style="width:100%">
-            <input value="${esc(p.link||'')}" oninput="chPick[${i}].link=this.value" placeholder="扩展链接（选填，需自行确保ID正确，否则会导致发布失败）" style="width:100%">
+          <div class="ct-channels" style="display:${isCommon?'none':'block'}">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+              <span style="width:66px;flex-shrink:0;color:var(--sub);font-size:13px;text-align:right">短标题</span>
+              <input value="${esc(p.title||'')}" oninput="chPick[${i}].title=this.value" maxlength="16" placeholder="概括视频主要内容，字数建议6-16个字符" style="flex:1">
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
+              <span style="width:66px;flex-shrink:0;color:var(--sub);font-size:13px;text-align:right;padding-top:8px">封面/4:3</span>
+              <div onclick="chPickCover(${i})" title="点击上传封面（或用左侧「截帧」）" style="width:132px;height:99px;border:1.5px dashed var(--line);border-radius:9px;display:grid;place-items:center;cursor:pointer;overflow:hidden;background:var(--card2)">
+                ${p.cover?`<img src="${coverUrl(p.cover)}" style="width:100%;height:100%;object-fit:cover">`:`<div style="text-align:center;color:var(--sub)"><div style="font-size:24px;line-height:1">＋</div><div style="font-size:12px;margin-top:2px">上传</div></div>`}
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="width:66px;flex-shrink:0;color:var(--sub);font-size:13px;text-align:right">扩展链接</span>
+              <input value="${esc(p.link||'')}" oninput="chPick[${i}].link=this.value" placeholder="选填，需自行确保 ID 正确" style="flex:1">
+            </div>
+            <div style="color:var(--dim);font-size:11.5px;margin-top:7px;margin-left:78px">请自行确保相关设置的 ID 正确，否则会导致发布失败</div>
           </div>
-          <div class="ct-common" style="display:${p._tab==='common'?'flex':'none'};flex-direction:column;gap:6px">
-            <textarea oninput="chPick[${i}].desc=this.value" placeholder="简介（选填）" rows="2" style="width:100%;resize:vertical;font-family:inherit">${esc(p.desc||'')}</textarea>
-            <input value="${esc((p.tags||[]).join(' '))}" oninput="chPick[${i}].tags=this.value.split(/[ ,，]+/).filter(Boolean)" placeholder="话题（空格分隔）" style="width:100%">
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1" title="${esc(p.name)}">${esc(p.name)}</span>
-            <button class="x" onclick="removePick(${i})">✕</button>
+          <div class="ct-common" style="display:${isCommon?'block':'none'}">
+            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px">
+              <span style="width:66px;flex-shrink:0;color:var(--sub);font-size:13px;text-align:right;padding-top:8px">简介</span>
+              <textarea oninput="chPick[${i}].desc=this.value" placeholder="简介（选填）" rows="3" style="flex:1;resize:vertical;font-family:inherit">${esc(p.desc||'')}</textarea>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="width:66px;flex-shrink:0;color:var(--sub);font-size:13px;text-align:right">话题</span>
+              <input value="${esc((p.tags||[]).join(' '))}" oninput="chPick[${i}].tags=this.value.split(/[ ,，]+/).filter(Boolean)" placeholder="话题（空格分隔）" style="flex:1">
+            </div>
           </div>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;}).join('');
+}
+async function xvReplaceVideo(i){
+  try{
+    let paths=[];
+    if(window.electronAPI&&electronAPI.pickFiles){ const r=await electronAPI.pickFiles(await _xvOutDir()); paths=(r&&r.paths)||[]; }
+    else { const d=await api('/api/channels/pick_videos','POST'); paths=(d&&d.paths)||[]; }
+    if(!paths.length) return;
+    const np=paths[0]; chPick[i].path=np; chPick[i].name=np.split(/[\\/]/).pop(); chPick[i].cover='';
+    renderPickList(); if(typeof chPreview==='function') chPreview();
+  }catch(e){ uiAlert(e.message); }
 }
 function removePick(i){ chPick.splice(i,1); renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview(); }
 function cardTab(i,tab){
   chPick[i]._tab=tab;
   const card=document.querySelectorAll('#chPickList .card')[i]; if(!card) return;
-  card.querySelector('.ct-channels').style.display=tab==='channels'?'flex':'none';
-  card.querySelector('.ct-common').style.display=tab==='common'?'flex':'none';
+  card.querySelector('.ct-channels').style.display=tab==='channels'?'block':'none';
+  card.querySelector('.ct-common').style.display=tab==='common'?'block':'none';
   card.querySelectorAll('.ct').forEach(t=>{ const on=t.dataset.tab===tab;
     t.style.color=on?'var(--acc2)':'var(--sub)'; t.style.borderBottom='2px solid '+(on?'var(--acc)':'transparent'); });
 }
@@ -1935,7 +2618,8 @@ async function chPickCover(i){
 
 function chBody(){
   const tagsStr=document.getElementById('chTags').value.trim();
-  const tags=tagsStr?tagsStr.split(/[,，\s]+/).filter(Boolean):[];
+  // 话题没填 → 用默认话题模板（每条卡单独填过的仍以卡为准）
+  const tags=tagsStr?tagsStr.split(/[,，\s]+/).filter(Boolean):XV_DEF_TAGS.slice();
   const desc=document.getElementById('chDesc').value.trim();
   const original=document.getElementById('chOriginal').checked;
   const items=chPick.map(p=>({video_path:p.path, title:p.title||p.name,
@@ -1958,33 +2642,108 @@ function chBody(){
 }
 function _v(id){ const e=document.getElementById(id); return e?e.value.trim():''; }
 let chListsTimer=null;
-async function chFetchLists(){
-  const aid=[...chAccSel][0];
-  if(!aid){ uiAlert('先勾选一个视频号账号，再拉取它的合集/剧集'); return; }
-  document.getElementById('chListsMeta').textContent='正在用账号会话拉取…（要开一下无头浏览器，稍等）';
-  try{
-    await api('/api/channels/account/'+aid+'/fetch_lists','POST');
-    clearInterval(chListsTimer);
-    chListsTimer=setInterval(async()=>{
-      const s=await api('/api/channels/lists_status');
-      if(!s.running){
-        clearInterval(chListsTimer);
-        const d=s.data||{};
-        if(d.error){ document.getElementById('chListsMeta').textContent='拉取失败：'+d.error; return; }
-        fillList('chCollList',d.collections); fillList('chDramaList',d.dramas); fillList('chLocList',d.activities);
-        const nc=(d.collections||[]).length, nd=(d.dramas||[]).length;
-        let msg;
-        if(nc+nd){ msg=`✅ 已连上视频号：合集 ${nc} / 剧集 ${nd}，点输入框可选`; }
-        else if(d.saw_collection_api){ msg='✅ 已连上视频号：这个号暂无合集（去视频号后台建一个合集，再拉就会出现）'; }
-        else { msg='⚠ 没抓到合集接口，可能页面改版或未登录'; if(d.debug&&d.debug.length) msg+='｜命中: '+d.debug.slice(0,5).join('、'); }
-        document.getElementById('chListsMeta').textContent=msg;
-        window._chLists=d;   // 存起来，报错时能查
-      }
-    },1500);
-  }catch(e){ document.getElementById('chListsMeta').textContent='拉取失败：'+e.message; }
+function chFetchLists(){ return _fetchLists(); }
+// 拉取账号的合集/剧集/活动。返回 Promise<data|null>，拉完 resolve（供剧集弹窗自动拉取用）。
+function _fetchLists(){
+  return new Promise(async(resolve)=>{
+    const aid=[...chAccSel][0];
+    const meta=document.getElementById('chListsMeta');
+    if(!aid){ uiAlert('先在右侧「平台和账号配置」勾选一个已登录的视频号账号'); return resolve(null); }
+    if(meta) meta.textContent='正在用账号会话拉取…（要开一下无头浏览器，稍等）';
+    try{
+      await api('/api/channels/account/'+aid+'/fetch_lists','POST');
+      clearInterval(chListsTimer);
+      chListsTimer=setInterval(async()=>{
+        const s=await api('/api/channels/lists_status');
+        if(!s.running){
+          clearInterval(chListsTimer);
+          const d=s.data||{};
+          if(d.error){ if(meta) meta.textContent='拉取失败：'+d.error; return resolve(d); }
+          fillList('chCollList',d.collections); fillList('chLocList',d.activities);
+          window._chDramas=d.dramas||[];   // 剧集给弹窗用
+          window._chLists=d;               // 存起来，报错时能查
+          const nc=(d.collections||[]).length, nd=(d.dramas||[]).length;
+          let msg;
+          if(d.logged_out){ msg='❌ 登录态已失效！这个号需要重新登录：去「账号管理」点它→重新扫码。注意别在「查看后台」里重复扫码（会把主登录踢下线）。'; }
+          else if(nc+nd){ msg=`✅ 已连上视频号：合集 ${nc} / 剧集 ${nd}（合集点输入框选，剧集点「选择视频号剧集」）`; }
+          else if(d.saw_collection_api||d.saw_drama_api){ msg='✅ 已连上视频号：这个号暂无合集/剧集（去视频号后台建好再拉）'; }
+          else { msg='⚠ 没抓到合集/剧集接口，可能登录态过期或页面改版'; if(d.debug&&d.debug.length) msg+='｜命中: '+d.debug.slice(0,5).join('、'); }
+          if(meta) meta.textContent=msg;
+          resolve(d);
+        }
+      },1500);
+    }catch(e){ if(meta) meta.textContent='拉取失败：'+e.message; resolve(null); }
+  });
 }
 function fillList(id,arr){ const dl=document.getElementById(id); if(!dl) return;
   dl.innerHTML=(arr||[]).map(x=>{ const nm=(typeof x==='string')?x:(x&&x.name)||''; return nm?`<option value="${esc(nm)}">`:''; }).join(''); }
+
+/* ===== 视频号剧集选择弹窗（仿小V猫） ===== */
+let _dramaPick=null;
+async function openDramaPicker(){
+  let list=window._chDramas||[];
+  if(!list.length){
+    const aid=[...chAccSel][0];
+    if(!aid){ uiAlert('先在右侧「平台和账号配置」勾选一个已登录的视频号账号'); return; }
+    // 没数据就自动拉取（不用先去点「拉取账号数据」）
+    document.getElementById('dramaSearch').value='';
+    document.getElementById('dramaList').innerHTML='<div style="padding:44px 20px;text-align:center;color:var(--sub);line-height:1.8">正在用账号登录态拉取剧集…<br><span style="font-size:12px;color:var(--dim)">要开一下无头浏览器，约 10-20 秒，请稍候</span></div>';
+    document.getElementById('dramaModal').style.display='flex';
+    const d=await _fetchLists();
+    list=window._chDramas||[];
+    if(!list.length){
+      const hint=(d&&d.logged_out)
+        ? '❌ 登录态已失效，需要重新登录：去「账号管理」点这个号重新扫码。<b>注意：别在「查看后台」里重复扫码</b>，那会把主登录踢下线导致失效。'
+        : (d&&(d.saw_drama_api||d.saw_collection_api))
+          ? '连上了视频号，但这个号没抓到剧集。可能：① 这个号没发过剧集；② 视频号返回的字段名跟预期不同（把这句连同下面的调试info发我）。'
+          : '没连上视频号接口，多半是登录态过期——去「账号管理」点这个号重新扫码。';
+      const dbg=(d&&d.debug&&d.debug.length)?('<br><span style="font-size:11px;color:var(--dim)">调试info: '+esc(d.debug.slice(0,6).join('、'))+'</span>'):'';
+      document.getElementById('dramaList').innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--dim);line-height:1.8">没拉到剧集<br><span style="font-size:12.5px;color:var(--sub)">'+hint+'</span>'+dbg+'</div>';
+      return;
+    }
+  }
+  _dramaPick=document.getElementById('chDrama').value||null;
+  document.getElementById('dramaSearch').value='';
+  renderDramaList();
+  document.getElementById('dramaModal').style.display='flex';
+}
+function closeDramaPicker(){ document.getElementById('dramaModal').style.display='none'; }
+function renderDramaList(){
+  const kw=(document.getElementById('dramaSearch').value||'').trim().toLowerCase();
+  const list=(window._chDramas||[]).filter(d=>!kw||(d.name||'').toLowerCase().includes(kw));
+  const box=document.getElementById('dramaList');
+  if(!list.length){ box.innerHTML='<div class="empty" style="padding:30px;text-align:center;color:var(--dim)">没有匹配的剧集</div>'; return; }
+  box.innerHTML=list.map(d=>{
+    const sel=_dramaPick===d.name;
+    const cover=d.cover?`<img src="${esc(d.cover)}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`:'';
+    return `<div onclick="pickDrama('${esc(d.name).replace(/'/g,"\\'")}')" style="display:flex;gap:12px;align-items:center;padding:12px 8px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:8px;${sel?'background:#eee9fd':''}">
+      <div style="width:22px;flex-shrink:0;display:grid;place-items:center">
+        <span style="width:16px;height:16px;border-radius:50%;border:2px solid ${sel?'var(--acc)':'var(--line)'};display:block;position:relative">${sel?'<span style="position:absolute;inset:2px;border-radius:50%;background:var(--acc)"></span>':''}</span>
+      </div>
+      <div style="width:54px;height:72px;flex-shrink:0;border-radius:6px;overflow:hidden;background:#000;display:grid;place-items:center">${cover||'<span style=\"font-size:20px;color:#888\">🎬</span>'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px;color:var(--txt)">${esc(d.name)}</div>
+        <div style="color:var(--sub);font-size:12px;margin-top:2px">共 ${d.count||0} 集</div>
+        <div style="color:var(--dim);font-size:11px;margin-top:3px;word-break:break-all;line-height:1.4">event/${esc(d.exportId||'')}</div>
+      </div>
+    </div>`;}).join('');
+}
+function pickDrama(name){ _dramaPick=name; renderDramaList(); }
+function confirmDrama(){
+  if(!_dramaPick){ uiAlert('先选一个剧集'); return; }
+  const d=(window._chDramas||[]).find(x=>x.name===_dramaPick);
+  document.getElementById('chDrama').value=_dramaPick;
+  document.getElementById('chDramaExport').value=d?d.exportId:'';
+  document.getElementById('chDramaShow').textContent=_dramaPick+(d?`（共${d.count}集）`:'');
+  document.getElementById('chDramaShow').style.color='var(--txt)';
+  document.getElementById('chDramaClear').style.display='inline';
+  closeDramaPicker();
+}
+function clearDrama(){
+  document.getElementById('chDrama').value=''; document.getElementById('chDramaExport').value='';
+  const s=document.getElementById('chDramaShow'); s.textContent='未选择'; s.style.color='var(--sub)';
+  document.getElementById('chDramaClear').style.display='none';
+}
 function chDistChange(){
   const even=document.getElementById('chDistribute').value==='even';
   const box=document.getElementById('chEvenBox'); if(box) box.style.display=even?'block':'none';
@@ -2076,6 +2835,109 @@ async function chAddAccount(btn){
   },3000);
 }
 async function chRelogin(id){ try{ await api('/api/channels/account/'+id+'/relogin','POST'); toast('已弹出浏览器，重新扫码（同微信只能在线一个号）'); startChannelsPoll(); }catch(e){ uiAlert(e.message); } }
+async function chOpenBackend(id,btn){
+  const acc=chAccounts.find(a=>a.id===id);
+  if(window.electronAPI&&window.electronAPI.isElectron){
+    if(btn){ btn.disabled=true; const o=btn.innerHTML; btn.textContent='打开中…'; setTimeout(()=>{btn.disabled=false;btn.innerHTML=o;},1200); }
+    try{ await openAcctBackend(id, acc?acc.name:id); }catch(e){ uiAlert(e.message||'打开失败'); }
+    return;
+  }
+  // 非 Electron（pywebview）：退回独立浏览器窗口
+  const old=btn?btn.innerHTML:''; if(btn){btn.disabled=true;btn.textContent='打开中…';}
+  try{ await api('/api/channels/account/'+id+'/open_backend','POST'); toast('已用该账号登录态打开视频号后台（独立浏览器窗口）'); }
+  catch(e){ uiAlert(e.message); }
+  if(btn) setTimeout(()=>{ btn.disabled=false; btn.innerHTML=old; },1500);
+}
+/* ===== 内嵌视频号后台（Electron webview 多标签，扫码登录，会话持久化隔离） ===== */
+let backendTabs=[], backendActive=null;
+const CH_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+async function openAcctBackend(aid, name){
+  const emp=document.getElementById('chAcctBackendEmpty'); if(emp) emp.style.display='none';
+  if(!backendTabs.find(t=>t.aid===aid)){
+    const part='persist:ch_'+aid;   // 每个号独立持久会话；在这里扫一次码，扫完点「同步登录到发布」
+    backendTabs.push({aid, name, part});
+    const wv=document.createElement('webview');
+    wv.id='wv_'+aid;
+    wv.setAttribute('partition', part);
+    wv.setAttribute('useragent', CH_UA);   // 标准 Chrome UA，避免被当异常浏览器
+    wv.setAttribute('src','https://channels.weixin.qq.com/');   // 没登录显二维码，扫码即登
+    wv.setAttribute('allowpopups','');
+    // 四边全 0 撑满父容器；【关键】绝不设 display（Electron webview 靠默认 display:flex 撑满内容，
+    // 改成 block/none 内部会退回约150px）。切换标签用 visibility+z-index，不动 display。
+    wv.style.cssText='position:absolute;top:0;right:0;bottom:0;left:0;border:0;visibility:hidden;z-index:1';
+    wv.addEventListener('dom-ready', ()=>zoomFitBackend(wv));
+    document.getElementById('chAcctBackendBody').appendChild(wv);
+  }
+  showBackendTab(aid);
+}
+function zoomFitBackend(wv){
+  const body=document.getElementById('chAcctBackendBody'); if(!body||!wv) return;
+  const z=Math.max(0.5, Math.min(1, body.clientWidth/1120));   // 缩放装进窗格
+  try{ wv.setZoomFactor(z); }catch(e){}
+}
+function zoomFitAll(){ document.querySelectorAll('#chAcctBackendBody webview').forEach(zoomFitBackend); }
+window.addEventListener('resize', ()=>zoomFitAll());
+function showBackendTab(aid){
+  backendActive=aid;
+  document.querySelectorAll('#chAcctBackendBody webview').forEach(w=>{
+    const on=w.id==='wv_'+aid;
+    w.style.visibility=on?'visible':'hidden';   // 不碰 display，保留 UA 的 display:flex
+    w.style.zIndex=on?'2':'1';
+  });
+  const act=document.getElementById('chBackendActions'); if(act) act.style.display=aid?'flex':'none';
+  renderBackendTabs();
+}
+// 清空这个号的后台会话（脏cookie/登录失败时用），重新加载出干净二维码
+async function clearBackendLogin(){
+  const aid=backendActive; if(!aid) return;
+  if(!await uiConfirm('清空这个号的后台登录会话，重新扫码？（用于登录失败/脏会话）','清空重登')) return;
+  try{ if(window.electronAPI&&electronAPI.clearPartition) await electronAPI.clearPartition(aid); }catch(e){}
+  const w=document.getElementById('wv_'+aid);
+  if(w){ try{ w.reloadIgnoringCache?w.reloadIgnoringCache():w.reload(); }catch(e){ try{ w.src='https://channels.weixin.qq.com/'; }catch(_){} } }
+  toast('已清空会话，稍等出二维码，扫码登录进后台后点「同步登录到发布」');
+}
+// 把后台webview里扫码得到的登录态(cookie+localStorage)同步给发布/剧集用
+async function syncBackendLogin(){
+  const aid=backendActive; if(!aid){ uiAlert('先打开一个账号的后台'); return; }
+  const w=document.getElementById('wv_'+aid);
+  if(!w){ uiAlert('后台窗口不存在'); return; }
+  try{
+    // 1) 读分区 cookie（主进程）
+    let cookies=[];
+    if(window.electronAPI&&electronAPI.getPartitionCookies){
+      const r=await electronAPI.getPartitionCookies(aid); cookies=(r&&r.cookies)||[];
+    }
+    // 2) 读 webview 页面的 localStorage（要在 channels.weixin 域下）
+    let ls=[];
+    try{ ls=await w.executeJavaScript('(function(){try{return Object.entries(localStorage);}catch(e){return[];}})()'); }catch(e){}
+    if(!cookies.some(c=>c.name==='sessionid')){
+      uiAlert('后台还没登录成功（没读到 sessionid）。先在后台把二维码扫了、真正进到视频号后台，再点同步。'); return;
+    }
+    const d=await api('/api/channels/account/'+aid+'/save_state','POST',{cookies, localStorage:ls});
+    toast(`已同步（cookie ${d.cookies}）。正在真机校验登录态是否有效…`);
+    // 同步后自动校验：开无头浏览器看会不会被踢到 login 页
+    const chk=await api('/api/channels/account/'+aid+'/check_login','POST');
+    if(chk&&chk.valid){ uiAlert('✅ 登录态有效！这个号现在能用了。去「一键发布」点「选择视频号剧集」试试。'); }
+    else{ uiAlert('❌ 同步的登录态无效——说明后台其实还没真正登录进视频号（可能扫了但没进后台，或视频号在限流）。请先在后台把二维码扫了、确认进到视频号后台首页，再点同步。'); }
+    refreshChannels();
+  }catch(e){ uiAlert('同步失败：'+(e.message||e)); }
+}
+function renderBackendTabs(){
+  const box=document.getElementById('chAcctBackendTabs'); if(!box) return;
+  box.innerHTML=backendTabs.map(t=>{
+    const on=t.aid===backendActive;
+    return `<span onclick="showBackendTab('${t.aid}')" style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:9px 9px 0 0;cursor:pointer;font-size:13px;background:${on?'#fff':'transparent'};border:1px solid ${on?'var(--line)':'transparent'};border-bottom:0;color:${on?'var(--acc)':'var(--sub)'};font-weight:${on?'700':'500'}">
+      🖥 ${esc(t.name)} <b onclick="event.stopPropagation();closeBackendTab('${t.aid}')" style="color:var(--dim);font-weight:400">✕</b></span>`;
+  }).join('');
+}
+function closeBackendTab(aid){
+  backendTabs=backendTabs.filter(t=>t.aid!==aid);
+  const w=document.getElementById('wv_'+aid); if(w) w.remove();
+  if(backendActive===aid){
+    if(backendTabs.length) showBackendTab(backendTabs[backendTabs.length-1].aid);
+    else { backendActive=null; renderBackendTabs(); const emp=document.getElementById('chAcctBackendEmpty'); if(emp) emp.style.display='flex'; const act=document.getElementById('chBackendActions'); if(act) act.style.display='none'; }
+  } else renderBackendTabs();
+}
 async function chDelAccount(id){ if(!await uiConfirm('删除这个账号？（清掉本地登录信息，不影响你的视频号本身）','删除账号'))return; await api('/api/channels/account/'+id,'DELETE'); refreshChannels(); }
 async function chRenameAccount(id, cur){ const v=await uiPrompt('账号备注名：',{def:cur}); if(v==null)return; await api('/api/channels/account/'+id+'/edit','POST',{name:v}); refreshChannels(); }
 
@@ -2085,25 +2947,68 @@ function renderAccounts(accs){
   const m=document.getElementById('chAccMeta'); if(m){ m.textContent=`${chAccounts.length} 个账号 · ${on} 在线`; m.className='tag '+(on?'ok':''); }
   const q=(document.getElementById('chAccSearch')?.value||'').trim().toLowerCase();
   const show=q? chAccounts.filter(a=>((a.name||'')+(a.note||'')+(a.group||'')+(a.wxid||'')).toLowerCase().includes(q)) : chAccounts;
-  document.getElementById('chAccList').innerHTML=chAccounts.length? (show.length? show.map(a=>`
-    <div class="card" style="padding:11px 14px;display:flex;gap:13px;align-items:center">
-      <div style="position:relative;flex-shrink:0;width:46px;height:46px">
+  document.getElementById('chAccList').innerHTML=chAccounts.length? (show.length? show.map(a=>{
+    const active=backendActive===a.id;
+    return `
+    <div data-aid="${a.id}" onclick="${a.online?`chOpenBackend('${a.id}')`:`chRelogin('${a.id}')`}"
+         style="padding:9px 10px;display:flex;gap:10px;align-items:center;cursor:pointer;border-radius:10px;border:1px solid ${active?'var(--acc)':'var(--line)'};background:${active?'rgba(124,110,255,.10)':'var(--card)'}">
+      <div style="position:relative;flex-shrink:0;width:40px;height:40px">
         <img src="/api/channels/account/${a.id}/avatar?v=${a.avatar?1:0}" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"
-             style="width:46px;height:46px;border-radius:50%;object-fit:cover;background:var(--card2);display:${a.avatar?'block':'none'}">
-        <div style="display:${a.avatar?'none':'grid'};width:46px;height:46px;border-radius:50%;background:var(--grad);place-items:center;font-size:19px;font-weight:700;color:#fff">${esc((a.name||'?').slice(0,1))}</div>
-        <span title="${a.online?'在线':'离线'}" style="position:absolute;right:0;bottom:0;width:12px;height:12px;border-radius:50%;border:2px solid var(--bg2,#1a1d29);background:${a.online?'var(--ok)':'var(--dim)'}"></span>
+             style="width:40px;height:40px;border-radius:50%;object-fit:cover;background:var(--card2);display:${a.avatar?'block':'none'}">
+        <div style="display:${a.avatar?'none':'grid'};width:40px;height:40px;border-radius:50%;background:var(--grad);place-items:center;font-size:16px;font-weight:700;color:#fff">${esc((a.name||'?').slice(0,1))}</div>
+        <span title="${a.online?'在线':'离线'}" style="position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;border:2px solid var(--sidebar);background:${a.online?'var(--ok)':'var(--dim)'}"></span>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.name)}${a.note?` <span style="color:var(--dim);font-size:12px;font-weight:400">(${esc(a.note)})</span>`:''}</div>
-        <div style="color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">${a.wxid?`视频号ID: <span style="color:var(--txt);font-family:monospace">${esc(a.wxid)}</span>`:'<span style="color:var(--warn)">点「重登」补全头像/ID</span>'}</div>
-        <div style="color:var(--dim);font-size:11.5px;margin-top:1px">${a.online?'🟢 在线':'⚪ 离线（需重新扫码）'} · ${esc(a.group||'默认分组')}</div>
+        <div style="font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.name)}${a.note?` <span style="color:var(--dim);font-size:11px;font-weight:400">(${esc(a.note)})</span>`:''}</div>
+        <div style="color:var(--sub);font-size:11px;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">${a.wxid?esc(a.wxid):(a.online?'点⋮重登补全ID':'离线')}</div>
       </div>
-      <button class="btn ghost" style="padding:6px 10px" onclick="chRelogin('${a.id}')">${a.online?'重登':'扫码登录'}</button>
-      <button class="btn ghost" style="padding:6px 10px" onclick='chRenameAccount("${a.id}",${JSON.stringify(a.name)})'>改名</button>
-      <button class="btn ghost" style="padding:6px 10px" onclick='chEditNote("${a.id}",${JSON.stringify(a.note||"")})'>备注</button>
-      <button class="x" title="删除" onclick="chDelAccount('${a.id}')">✕</button>
-    </div>`).join('') : '<div class="empty" style="padding:16px">没有匹配的账号</div>') : emptyBox('👤','还没有账号','点右上角「➕ 添加账号」，扫码登录你的视频号');
+      <button class="btn ghost" style="padding:4px 8px;flex-shrink:0" title="更多" onclick="event.stopPropagation();acctMenu('${a.id}',this)">⋮</button>
+    </div>`;}).join('') : '<div class="empty" style="padding:16px">没有匹配的账号</div>') : emptyBox('👤','还没有账号','点「＋ 添加账号」扫码登录');
   renderAccPick();
+}
+function acctMenu(aid, el){
+  const a=chAccounts.find(x=>x.id===aid)||{};
+  const items=[
+    ...(a.online?[{label:'🖥 查看后台',fn:()=>chOpenBackend(aid)}]:[]),
+    ...(a.online?[{label:'📊 数据回查',fn:()=>chShowStats(aid)}]:[]),
+    {label:a.online?'重新登录':'扫码登录',fn:()=>chRelogin(aid)},
+    {label:'改名',fn:()=>chRenameAccount(aid,a.name)},
+    {label:'备注',fn:()=>chEditNote(aid,a.note||'')},
+    {label:'删除账号',fn:()=>chDelAccount(aid)},
+  ];
+  xvMenu(el, items);
+}
+/* ===== 发布后数据回查：拉已发作品播放/点赞，连续0播=限流预警 ===== */
+async function chShowStats(aid){
+  let ov=document.getElementById('chStatsOv');
+  if(!ov){ ov=document.createElement('div'); ov.id='chStatsOv'; ov.className='overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:990;display:grid;place-items:center';
+    ov.onclick=e=>{ if(e.target===ov) ov.remove(); }; document.body.appendChild(ov); }
+  ov.innerHTML=`<div style="background:var(--card);border-radius:14px;width:min(720px,92vw);max-height:82vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px">
+      <b>📊 数据回查</b><span id="chStatsMeta" style="color:var(--sub);font-size:12px">正在拉取最新数据(开一次后台浏览器,约15秒)…</span>
+      <span style="margin-left:auto;cursor:pointer;font-size:18px" onclick="document.getElementById('chStatsOv').remove()">✕</span>
+    </div>
+    <div id="chStatsBody" style="padding:8px 18px 16px;overflow:auto"><div class="empty" style="padding:30px">⏳ 拉取中…</div></div></div>`;
+  try{
+    const d=await api('/api/channels/stats?refresh=1&account_id='+aid);
+    const s=(d.stats||{})[aid]||{};
+    const posts=s.posts||[];
+    document.getElementById('chStatsMeta').textContent=`${s.name||''} · 更新于 ${s.ts||'-'} · 共${posts.length}条`;
+    const warn=s.warn?`<div style="background:rgba(224,85,78,.12);color:var(--red);border-radius:9px;padding:9px 12px;margin:6px 0 10px;font-size:13px">⚠ ${esc(s.warn_msg)}（建议暂停该号发布1-2天）</div>`:'';
+    document.getElementById('chStatsBody').innerHTML = warn + (posts.length?`
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <tr style="color:var(--sub);text-align:left"><th style="padding:6px 4px">作品</th><th>发布时间</th><th>播放</th><th>点赞</th><th>评论</th><th>转发</th><th>收藏</th></tr>
+        ${posts.map(p=>`<tr style="border-top:1px solid var(--line)">
+          <td style="padding:7px 4px;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.desc)}">${esc(p.desc||'(无描述)')}</td>
+          <td style="white-space:nowrap;color:var(--sub)">${p.create_time?new Date(p.create_time*1000).toLocaleString('zh',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-'}</td>
+          <td style="${(p.read||0)===0?'color:var(--red);font-weight:700':''}">${fmtN(p.read||0)}</td>
+          <td>${fmtN(p.like||0)}</td><td>${fmtN(p.comment||0)}</td><td>${fmtN(p.forward||0)}</td><td>${fmtN(p.fav||0)}</td>
+        </tr>`).join('')}
+      </table>`:`<div class="empty" style="padding:30px">${esc(s.err||'这个号还没有已发作品')}</div>`);
+  }catch(e){
+    const b=document.getElementById('chStatsBody'); if(b) b.innerHTML=`<div class="empty" style="padding:30px">拉取失败: ${esc(e.message)}</div>`;
+  }
 }
 async function chEditNote(id, cur){ const v=await uiPrompt('备注：',{def:cur}); if(v==null)return; await api('/api/channels/account/'+id+'/edit','POST',{note:v}); refreshChannels(); }
 function renderAccPick(){
@@ -2218,27 +3123,120 @@ async function chOpenDrafts(){
   }catch(e){ uiAlert(e.message); }
 }
 
-const UP_ST={queued:['⏳','排队',''],running:['📤','上传中','load'],done:['✅','完成','ok'],failed:['❌','失败','fail']};
-function upRow(t){
-  const [ic,label,cls]=UP_ST[t.status]||['•',t.status,''];
-  return `<div class="card" style="padding:10px 14px;display:flex;gap:10px;align-items:center">
-    <span style="flex-shrink:0">${ic}</span>
-    <div style="flex:1;min-width:0">
-      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.account_name?`<span style="color:var(--acc2)">[${esc(t.account_name)}]</span> `:''}${esc(t.title)}</div>
-      <div style="color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.stage||'')}${t.err?` · <span style="color:var(--red)">${esc(t.err)}</span>`:''} · ${esc(t.ts)}</div>
+/* ===== 任务记录（仿小V猫） ===== */
+const UP_ST={queued:['●','排队中','var(--sub)'],running:['●','上传中','var(--acc2)'],done:['●','已同步','var(--ok)'],failed:['●','失败','var(--red)'],cancelled:['●','已取消','#e8a23d']};
+let tkTasks=[], tkSel=new Set();
+function tkRow(t){
+  let [dot,label,color]=UP_ST[t.status]||['●',t.status,'var(--sub)'];
+  // running 时"上传中"会误导(实际可能已在等视频号处理/发表)——让主标签跟随真实阶段
+  if(t.status==='running'&&t.stage){
+    const s=t.stage;
+    if(/发表|发布/.test(s)) label='发布中';
+    else if(/处理视频|转码|等.*就绪|等.*完成/.test(s)) label='视频号处理中';
+    else if(/上传|CDN/.test(s)) label='上传中';
+    else if(/封面|标题|话题|简介|位置|剧集|合集|声明|定时|原创/.test(s)) label='填写中';
+    else label='处理中';
+  }
+  const sel=tkSel.has(t.id);
+  const sched=t.schedule?('定时: '+t.schedule.slice(5)):'立即';
+  const reason=(t.status==='failed'&&t.err)?`<div style="color:var(--red);font-size:12px;margin-top:2px;word-break:break-all">原因: ${esc(t.err)}</div>`
+    :(t.status==='running'&&t.stage)?`<div style="color:var(--acc2);font-size:12px;margin-top:2px">${esc(t.stage)}</div>`
+    :(t.status==='cancelled'&&t.err)?`<div style="color:#e8a23d;font-size:12px;margin-top:2px">${esc(t.err)}</div>`:'';
+  const fname=(t.video_path||'').split(/[\\/]/).pop();
+  return `<div style="display:flex;gap:12px;align-items:center;padding:12px 4px;border-bottom:1px solid var(--line)">
+    <input type="checkbox" ${sel?'checked':''} onchange="tkToggle('${t.id}')" style="flex-shrink:0">
+    <div style="width:74px;height:99px;flex-shrink:0;border-radius:7px;overflow:hidden;background:#000">
+      <img loading="lazy" src="${t.cover_path?coverUrl(t.cover_path):('/api/channels/thumb?path='+encodeURIComponent(t.video_path||''))}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">
     </div>
-    <span class="tag ${cls}" style="flex-shrink:0">${label}</span>
+    <div style="width:200px;flex-shrink:0;min-width:0">
+      <div style="display:flex;gap:7px;align-items:center">
+        <img src="/api/channels/account/${t.account_id}/avatar" onerror="this.style.display='none'" style="width:26px;height:26px;border-radius:50%;object-fit:cover;flex-shrink:0">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.account_name||'')}</div>
+          <div style="font-size:11px;color:var(--dim);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.account_wxid||'')}</div>
+        </div>
+      </div>
+      <div style="font-size:12.5px;color:var(--sub);margin-top:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden" title="${esc(t.desc||t.title||'')}">${esc(t.desc||t.title||'')}</div>
+    </div>
+    <div style="width:150px;flex-shrink:0">
+      <div style="font-size:13px">发布: <b style="color:${color}">${dot} ${label}</b></div>
+      <div style="font-size:12.5px;color:var(--sub);margin-top:3px">追评: -</div>
+      ${reason}
+    </div>
+    <div style="flex:1;min-width:0;font-size:12px;color:var(--sub);line-height:1.75">
+      <div>创建: ${esc(t.created||'')}</div>
+      <div>执行: ${esc(t.exec_at||'-')}</div>
+      <div>完成: ${t.elapsed?('用时 '+esc(t.elapsed)):(t.done_at?esc(t.done_at):'-')}</div>
+    </div>
+    <div style="width:250px;flex-shrink:0;font-size:12px;color:var(--sub);line-height:1.7">
+      <div><span class="tag" style="font-size:11px;padding:1px 8px">${esc(sched)}</span> <span class="tag" style="font-size:11px;padding:1px 8px">${esc(t.vtype||'视频')}</span></div>
+      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(t.video_path||'')}">文件: …${esc((t.video_path||'').slice(-30))}</div>
+      <div>${t.size_mb?t.size_mb+' MB':''} <span style="color:var(--dim)">${esc((t.batch||'').replace('批次 ',''))}</span></div>
+    </div>
+    <div style="width:78px;flex-shrink:0;text-align:right;font-size:12.5px;line-height:2">
+      ${t.status!=='running'&&t.status!=='queued'?`<a onclick="tkRetry('${t.id}')" style="color:var(--acc2);cursor:pointer">立即重发</a><br>`:''}
+      <a onclick="tkDetail('${t.id}')" style="color:var(--acc2);cursor:pointer">详情</a>
+    </div>
   </div>`;
+}
+function renderTaskList(){
+  const box=document.getElementById('upList'); if(!box) return;
+  const kw=(v('tkSearch')||'').toLowerCase(), acc=(v('tkAcc')||'').toLowerCase(), st=v('tkStatus'), ty=v('tkType'), fr=v('tkFrom'), to=v('tkTo'), bt=v('tkBatch');
+  function v(id){const e=document.getElementById(id);return e?e.value.trim():'';}
+  let list=tkTasks.filter(t=>{
+    if(kw && !((t.title||'')+(t.desc||'')+(t.video_path||'')).toLowerCase().includes(kw)) return false;
+    if(acc && !((t.account_name||'')+(t.account_wxid||'')).toLowerCase().includes(acc)) return false;
+    if(st && t.status!==st) return false;
+    if(ty && (t.vtype||'视频')!==ty) return false;
+    const d=(t.created||'').slice(0,10);
+    if(fr && d && d<fr) return false;
+    if(to && d && d>to) return false;
+    if(bt && t.batch!==bt) return false;
+    return true;
+  });
+  box.innerHTML=list.length?list.map(tkRow).join(''):emptyBox('📋','没有匹配的任务记录','点「一键分发」后这里会记录每条视频的上传结果（成功/失败+原因）');
+  const n=document.getElementById('tkSelN'); if(n) n.textContent=tkSel.size;
+  // 批次下拉去重填充
+  const bsel=document.getElementById('tkBatch');
+  if(bsel){ const cur=bsel.value; const bs=[...new Set(tkTasks.map(t=>t.batch).filter(Boolean))];
+    bsel.innerHTML='<option value="">批次筛选</option>'+bs.map(b=>`<option ${b===cur?'selected':''}>${esc(b)}</option>`).join(''); }
+}
+function tkToggle(id){ tkSel.has(id)?tkSel.delete(id):tkSel.add(id); const n=document.getElementById('tkSelN'); if(n) n.textContent=tkSel.size; }
+function tkSelectAll(){ tkTasks.forEach(t=>tkSel.add(t.id)); renderTaskList(); }
+async function tkRetry(id){ try{ const d=await api('/api/channels/tasks/retry','POST',{ids:[id]}); toast(d.requeued?'已重新排队':'该任务当前不能重发'); refreshChannels(); }catch(e){ uiAlert(e.message); } }
+async function tkBulk(act){
+  if(!tkSel.size){ uiAlert('先勾选任务（或点右下角「全选」）'); return; }
+  const ids=[...tkSel];
+  try{
+    if(act==='retry'){ const d=await api('/api/channels/tasks/retry','POST',{ids}); toast(`已重新排队 ${d.requeued} 条`); }
+    if(act==='delete'){ if(!await uiConfirm(`删除选中的 ${ids.length} 条记录？`,'批量删除'))return; const d=await api('/api/channels/tasks/delete','POST',{ids}); toast(`已删除 ${d.deleted} 条`); tkSel.clear(); }
+    if(act==='pause'){ const d=await api('/api/channels/tasks/pause','POST',{ids}); toast(`已取消 ${d.cancelled} 条排队任务`); }
+    refreshChannels();
+  }catch(e){ uiAlert(e.message); }
+}
+function tkDetail(id){
+  const t=tkTasks.find(x=>x.id===id); if(!t) return;
+  const stmap={queued:'排队中',running:'上传中',done:'已同步',failed:'失败',cancelled:'已取消'};
+  uiAlert([
+    `状态: ${stmap[t.status]||t.status}${t.err?('　原因: '+t.err):''}`,
+    `账号: ${t.account_name||''} (${t.account_wxid||'-'})`,
+    `标题: ${t.title||''}`, `简介: ${t.desc||'-'}`,
+    `剧集: ${t.drama||'-'}　合集: ${t.collection||'-'}　位置: ${t.location||'-'}`,
+    `定时: ${t.schedule||'立即'}　批次: ${t.batch||'-'}`,
+    `创建: ${t.created||'-'}`, `执行: ${t.exec_at||'-'}`, `完成: ${t.done_at||'-'}（${t.elapsed||'-'}）`,
+    `文件: ${t.video_path||''}（${t.size_mb||'?'} MB）`,
+    (t.stage?('最后阶段: '+t.stage):'')
+  ].filter(Boolean).join('\n'), '任务详情');
 }
 function renderChannels(s){
   renderAccounts(s.accounts||[]);
   if(s.login_running && s.login_status) document.getElementById('chLoginStatus').textContent=s.login_status;
   const set=(id,txt)=>{const el=document.getElementById(id); if(el) el.textContent=txt;};
   set('upRunning','进行 '+((s.counts?.queued||0)+(s.counts?.running||0)));
-  set('upDone','完成 '+(s.counts?.done||0)); set('upFailed','失败 '+(s.counts?.failed||0));
-  const rb=document.getElementById('upRetryBtn'); if(rb) rb.style.display=(s.counts?.failed)?'inline-block':'none';
-  document.getElementById('upList').innerHTML=(s.tasks&&s.tasks.length)?s.tasks.map(upRow).join('')
-    :emptyBox('📤','还没有上传任务','选好视频、勾好账号、填好文案，点「开始上传」');
+  set('upDone','已同步 '+(s.counts?.done||0)); set('upFailed','失败 '+(s.counts?.failed||0));
+  set('upCancelled','已取消 '+(s.counts?.cancelled||0));
+  tkTasks=s.tasks||[];
+  renderTaskList();
 }
 async function refreshChannels(){ try{ renderChannels(await api('/api/channels/status')); }catch(e){} }
 async function loadUploadTasks(){ refreshChannels(); }

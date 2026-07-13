@@ -3,6 +3,7 @@
 import asyncio
 import json
 import base64
+import hashlib
 import os
 import random
 import re
@@ -17,13 +18,14 @@ from urllib.parse import quote
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse, Response
 from pydantic import BaseModel
 
 import platforms
 from platforms import get_adapter, PLATFORM_LIST
 import channels
 import dedup
+import ffdedup
 import jianying
 
 
@@ -46,7 +48,7 @@ DL.mkdir(exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 # 更新检查：指向 GitHub 上的 version.json
 UPDATE_RAW_URL = "https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json"
 RELEASE_PAGE = "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases"
@@ -92,8 +94,40 @@ CH_DIR = DATA / "channels"                     # 多账号：每个账号一个 
 CH_DIR.mkdir(exist_ok=True)
 CH_LOGIN = {"running": False, "status": "", "for": ""}   # for=正在登录的账号id
 UPLOAD_TASKS = {}
-UPLOAD_QUEUE: asyncio.Queue = asyncio.Queue()
+# 多账号并发上传：每个账号一条独立队列 + 一个独立工人协程（同账号内部串行、带随机间隔防封号），
+# 不同账号并行；全局用一个信号量把「同时在传的账号数」压在 ch_max_concurrent（默认3）以内。
+UP_ACCT_QUEUES: dict = {}     # aid -> asyncio.Queue
+UP_ACCT_WORKERS: dict = {}    # aid -> asyncio.Task
+UP_SEM = None                 # 全局并发闸；事件循环里懒创建
+MAIN_LOOP = None              # 主事件循环句柄；同步端点(线程池)里派任务要用它 call_soon_threadsafe
 _up_seq = 0
+UP_TASKS_FILE = DATA / "upload_tasks.json"     # 任务记录持久化(重启不丢)
+
+
+def _save_upload_tasks():
+    try:
+        items = list(UPLOAD_TASKS.values())[-500:]
+        UP_TASKS_FILE.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_upload_tasks():
+    global _up_seq
+    try:
+        if not UP_TASKS_FILE.exists():
+            return
+        for t in json.loads(UP_TASKS_FILE.read_text(encoding="utf-8")):
+            if t.get("status") in ("queued", "running"):   # 上次没跑完的标记中断
+                t["status"] = "cancelled"
+                t["err"] = t.get("err") or "软件重启，任务中断"
+            UPLOAD_TASKS[t["id"]] = t
+            try:
+                _up_seq = max(_up_seq, int(str(t["id"]).lstrip("u")))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 # 视频去重
 DEDUP_TASKS = {}
@@ -261,23 +295,43 @@ def pick_cover_url(aweme: dict, platform: str = "douyin"):
     return get_adapter(platform).normalize(aweme).get("cover")
 
 
-async def download_file(url: str, dest: Path) -> bool:
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=300,
-                                     headers={"User-Agent": UA, "Referer": "https://www.douyin.com/"}) as c:
-            async with c.stream("GET", url) as r:
-                if r.status_code != 200:
-                    return False
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dest.with_suffix(dest.suffix + ".part")
-                with open(tmp, "wb") as f:
-                    async for chunk in r.aiter_bytes(1 << 16):
-                        f.write(chunk)
-                tmp.replace(dest)
-                return True
-    except Exception as e:
-        log_err(f"下载失败 {dest.name}: {e}")
-        return False
+async def download_file(url: str, dest: Path, min_bytes: int = 4096, retries: int = 2) -> bool:
+    """下载到 dest。【完整性校验】CDN 偶尔返回 200 但空/半截 body → 产出0字节假文件，
+    后面整条链路(去重0字节→发布超时)全被带崩。下完校验大小，太小删掉自动重试 retries 次。"""
+    for attempt in range(retries + 1):
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=300,
+                                         headers={"User-Agent": UA, "Referer": "https://www.douyin.com/"}) as c:
+                async with c.stream("GET", url) as r:
+                    if r.status_code != 200:
+                        log_err(f"下载HTTP{r.status_code} {dest.name}(第{attempt+1}次)")
+                        await asyncio.sleep(1.5)
+                        continue
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with open(tmp, "wb") as f:
+                        async for chunk in r.aiter_bytes(1 << 16):
+                            f.write(chunk)
+            sz = tmp.stat().st_size if tmp.exists() else 0
+            if sz < min_bytes:                    # 空壳/半截 → 删掉重试
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                log_err(f"下载校验失败 {dest.name}: 只有{sz}字节，重试(第{attempt+1}次)")
+                await asyncio.sleep(1.5)
+                continue
+            tmp.replace(dest)
+            return True
+        except Exception as e:
+            log_err(f"下载失败 {dest.name}(第{attempt+1}次): {e}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            await asyncio.sleep(1.5)
+    return False
 
 
 def notify(title: str, msg: str, icon: Path | None = None):
@@ -362,7 +416,7 @@ async def download_aweme_media(nickname: str, aweme: dict, platform: str = "douy
     else:
         if it["video_url"]:
             vp = folder / f"{stem}.mp4"
-            if await download_file(it["video_url"], vp):
+            if await download_file(it["video_url"], vp, min_bytes=102400):   # 正片<100KB=必坏
                 return True, f"/files/{vp.relative_to(dl).as_posix()}"
     return False, ""
 
@@ -387,6 +441,11 @@ def _mix_episodes_done(nickname: str, mix_name: str, platform: str = "douyin") -
         for f in folder.iterdir():
             m = re.fullmatch(r"(\d+)\.mp4", f.name)
             if m:
+                try:
+                    if f.stat().st_size < 102400:   # 0字节/半截空壳≠已下载→追更时自动补下
+                        continue
+                except OSError:
+                    continue
                 done.add(int(m.group(1)))
     return done
 
@@ -689,16 +748,27 @@ async def api_aweme_images(aid: str, platform: str = "douyin"):
 
 @app.on_event("startup")
 async def _startup():
+    global MAIN_LOOP
+    MAIN_LOOP = asyncio.get_running_loop()   # 记下主循环：同步端点入队时靠它调度回来
+    _load_upload_tasks()                     # 视频号发布任务记录：重启恢复
+    _load_fd_tasks()                         # 去重任务记录：重启恢复
     asyncio.create_task(monitor_loop())
     for _ in range(2):                       # 两个下载工人：并发温和，防限流
         asyncio.create_task(_dl_worker())
-    asyncio.create_task(_upload_worker())    # 视频号上传：单工人串行，防风控
+    # 视频号上传：多账号并发（每账号一个工人，全局≤ch_max_concurrent）。重启恢复未发完的任务
+    for _tid in [k for k, t in UPLOAD_TASKS.items() if t.get("status") == "queued"]:
+        _enqueue_upload(_tid)
+    asyncio.create_task(_ch_keepalive_loop())  # 视频号登录保活：每4小时静默续期一次cookie
     asyncio.create_task(_dedup_worker())     # 视频去重：单工人（ffmpeg 吃 CPU）
+    _fd_resume_pending()                     # 去重导出：重启自动续跑上次没完成的批次
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (BASE / "static" / "index.html").read_text(encoding="utf-8")
+    html = (BASE / "static" / "index.html").read_text(encoding="utf-8")
+    # 绝不缓存首页（改完前端立即生效，避免 Electron 用旧缓存）
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, no-cache, must-revalidate",
+                                       "Pragma": "no-cache", "Expires": "0"})
 
 
 @app.get("/favicon.ico")
@@ -1378,10 +1448,12 @@ def api_downloads(platform: str = "douyin"):
             files.sort(key=lambda p: p.stat().st_mtime, reverse=True)   # 合集按集数，其余按时间
         items = [{"name": f.name, "url": f"/files/{f.relative_to(base).as_posix()}",
                   "size": round(f.stat().st_size / 1024 / 1024, 2),
+                  "mtime": f.stat().st_mtime,
                   "is_video": f.suffix.lower() == ".mp4"} for f in files]
         if items:
+            mt = max((it["mtime"] for it in items), default=0)
             groups.append({"blogger": label, "count": len(items), "files": items, "is_mix": is_mix,
-                           "rel": folder.relative_to(root).as_posix()})
+                           "mtime": mt, "rel": folder.relative_to(root).as_posix()})
         return subs
 
     if root.exists():
@@ -1600,7 +1672,37 @@ def _ch_state(aid: str) -> Path:
 
 
 def ch_online(aid: str) -> bool:
-    return _ch_state(aid).exists()
+    if not _ch_state(aid).exists():
+        return False
+    acc = _ch_account(aid)
+    return not (acc and acc.get("session_bad"))    # 被动校验:检测到失效就不算在线
+
+
+def _mark_session(aid: str, ok: bool):
+    """任何操作发现登录态死/活时更新标记（被动校验，不额外开浏览器）。"""
+    acc = _ch_account(aid)
+    if acc and bool(acc.get("session_bad")) == ok:   # 状态有变才写盘
+        acc["session_bad"] = not ok
+        _save(CONFIG_FILE, config)
+
+
+async def _ch_keepalive_loop():
+    """视频号登录保活：每4小时用各账号的持久档案静默访问一次后台（离屏无窗口），
+    cookie 被服务端续期 → 登录态长期有效（100小时+）。只报活不报死：
+    偶发网络失败不把账号误标下线（真死了会在下次发布/拉列表时被标）。"""
+    while True:
+        await asyncio.sleep(4 * 3600)
+        for a in list(_ch_accounts()):
+            aid = a.get("id")
+            if not aid or not _ch_state(aid).exists():
+                continue
+            try:
+                ok = await channels.check_login(_ch_state(aid))
+                if ok:
+                    _mark_session(aid, True)
+            except Exception:
+                pass
+            await asyncio.sleep(30)     # 账号间隔开，别同时开一堆浏览器
 
 
 def _ch_accounts() -> list:
@@ -1632,7 +1734,7 @@ async def _ch_login_bg(aid: str, is_new: bool, note: str, group: str):
             n = len(_ch_accounts()) + 1
             _ch_accounts().append({"id": aid, "name": nickname or f"视频号{n}", "note": note,
                                    "group": group or "默认分组", "wxid": wxid,
-                                   "avatar": info.get("avatar", False),
+                                   "avatar": info.get("avatar", False), "session_bad": False,
                                    "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
             _save(CONFIG_FILE, config)
         elif ok:
@@ -1644,6 +1746,7 @@ async def _ch_login_bg(aid: str, is_new: bool, note: str, group: str):
                     acc["wxid"] = wxid
                 if info.get("avatar"):
                     acc["avatar"] = True
+                acc["session_bad"] = False          # 重新登录成功→清失效标记
                 _save(CONFIG_FILE, config)
     except Exception as e:
         CH_LOGIN["status"] = f"登录出错：{str(e)[:120]}"
@@ -1676,13 +1779,67 @@ async def api_ch_relogin(aid: str):
     return {"ok": True}
 
 
+class SaveStateBody(BaseModel):
+    cookies: list = []              # [{name,value,domain,path,secure,httpOnly,sameSite,expires}]
+    localStorage: list = []         # [[name,value], ...] 或 [{name,value}]
+
+
+@app.post("/api/channels/account/{aid}/check_login")
+async def api_ch_check_login(aid: str):
+    """真机校验登录态是否有效（开无头浏览器，看会不会被踢到 login 页）。"""
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    if not _ch_state(aid).exists():
+        return {"ok": True, "valid": False}
+    try:
+        valid = await channels.check_login(_ch_state(aid))
+    except Exception as e:
+        return {"ok": True, "valid": False, "error": str(e)[:120]}
+    return {"ok": True, "valid": bool(valid)}
+
+
+@app.post("/api/channels/account/{aid}/save_state")
+def api_ch_save_state(aid: str, body: SaveStateBody):
+    """把 webview 后台分区里同步出来的 cookie+localStorage 写成 Playwright storage_state 文件，
+    这样发布/剧集(fetch_lists/upload)就复用 webview 的登录态，两套登录统一。"""
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    _by = {}
+    for c in (body.cookies or []):
+        if not c.get("name"):
+            continue
+        _by[(c["name"], c.get("domain", ".weixin.qq.com"))] = {   # 按(名,域)去重,保留最后一个
+            "name": c["name"], "value": c.get("value", ""),
+            "domain": c.get("domain", ".weixin.qq.com"), "path": c.get("path", "/"),
+            "expires": c.get("expires", -1), "httpOnly": bool(c.get("httpOnly")),
+            "secure": bool(c.get("secure")), "sameSite": c.get("sameSite", "None"),
+        }
+    cks = list(_by.values())
+    ls = []
+    for kv in (body.localStorage or []):
+        if isinstance(kv, dict):
+            ls.append({"name": kv.get("name", ""), "value": kv.get("value", "")})
+        elif isinstance(kv, (list, tuple)) and len(kv) >= 2:
+            ls.append({"name": kv[0], "value": kv[1]})
+    has_sess = any(c["name"] in ("sessionid", "wxuin") for c in cks)
+    if not has_sess:
+        return JSONResponse({"error": "后台还没登录成功（没读到 sessionid），先在后台扫码登录进去再同步"}, status_code=400)
+    state = {"cookies": cks, "origins": [
+        {"origin": "https://channels.weixin.qq.com", "localStorage": ls}]}
+    _ch_state(aid).parent.mkdir(parents=True, exist_ok=True)
+    _ch_state(aid).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "cookies": len(cks), "localStorage": len(ls)}
+
+
 CH_LISTS = {"running": False, "data": {}, "for": ""}
 
 
 async def _ch_fetch_lists_bg(aid: str):
     CH_LISTS.update({"running": True, "for": aid, "data": {}})
     try:
-        CH_LISTS["data"] = await channels.fetch_lists(_ch_state(aid))
+        data = await channels.fetch_lists(_ch_state(aid))
+        CH_LISTS["data"] = data
+        _mark_session(aid, not data.get("logged_out"))   # 被动校验
     except Exception as e:
         log_err(f"拉取视频号列表失败: {e}")
         CH_LISTS["data"] = {"error": str(e)[:120]}
@@ -1706,6 +1863,17 @@ async def api_ch_fetch_lists(aid: str):
 @app.get("/api/channels/lists_status")
 def api_ch_lists_status():
     return CH_LISTS
+
+
+@app.post("/api/channels/account/{aid}/open_backend")
+async def api_ch_open_backend(aid: str):
+    """打开这个账号的视频号后台（可见浏览器，用它的登录态）。"""
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    if not ch_online(aid):
+        return JSONResponse({"error": "该账号离线，请先重新扫码登录"}, status_code=400)
+    asyncio.create_task(channels.open_backend(_ch_state(aid)))
+    return {"ok": True}
 
 
 @app.get("/api/channels/account/{aid}/avatar")
@@ -1758,10 +1926,10 @@ def api_ch_accounts():
 
 @app.get("/api/channels/status")
 def api_channels_status():
-    counts = {k: 0 for k in ("queued", "running", "done", "failed")}
+    counts = {k: 0 for k in ("queued", "running", "done", "failed", "cancelled")}
     for t in UPLOAD_TASKS.values():
         counts[t["status"]] = counts.get(t["status"], 0) + 1
-    tasks = list(UPLOAD_TASKS.values())[-200:]
+    tasks = list(UPLOAD_TASKS.values())[-500:]
     tasks.reverse()
     return {"logged_in": ch_logged_in(), "accounts": _accs_with_online(),
             "login_running": CH_LOGIN["running"], "login_for": CH_LOGIN.get("for", ""),
@@ -1878,6 +2046,28 @@ def api_localimg(path: str):
     return FileResponse(str(p))
 
 
+@app.get("/api/channels/thumb")
+def api_ch_thumb(path: str):
+    """视频缩略图（首帧，带缓存）。发布卡片直接 <img src> 用，懒加载不阻塞。"""
+    v = Path(path)
+    if not v.exists() or v.suffix.lower() not in _VIDEO_EXTS:
+        return JSONResponse({"error": "视频不存在"}, status_code=404)
+    THUMBS_DIR = COVERS_DIR / "_thumbs"
+    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.md5(f"{v}|{v.stat().st_mtime_ns}".encode("utf-8")).hexdigest()
+    tp = THUMBS_DIR / f"{key}.jpg"
+    if not tp.exists():
+        try:
+            subprocess.run([dedup.FF, "-y", "-ss", "0.5", "-i", str(v),
+                            "-frames:v", "1", "-vf", "scale=240:-1", "-q:v", "4", str(tp)],
+                           capture_output=True, timeout=40)
+        except Exception as e:
+            log_err(f"缩略图失败: {e}")
+    if not tp.exists():
+        return JSONResponse({"error": "抽帧失败"}, status_code=404)
+    return FileResponse(str(tp))
+
+
 _VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".m4v")
 
 
@@ -1967,6 +2157,14 @@ def _plan_upload(body: "UploadBody"):
     if body.shuffle:
         items = items[:]
         random.shuffle(items)
+    else:
+        # 【按集数顺序发布】第1-2集最先发。按(所属剧文件夹, 集数)自然排序；没勾打乱才排。
+        def _ep_key(it):
+            base = Path(it.video_path).stem
+            m = (re.search(r"第\s*(\d+)", base) or re.match(r"(\d+)", base)
+                 or re.search(r"(\d+)", base))
+            return (Path(it.video_path).parent.name, int(m.group(1)) if m else 10**9, base)
+        items = sorted(items, key=_ep_key)
     base = None
     if body.time_mode in ("schedule", "local") and body.base_time:
         try:
@@ -1998,6 +2196,21 @@ def _plan_upload(body: "UploadBody"):
             at = base + timedelta(days=day,
                                   seconds=acct_i * body.acct_gap_sec + slot * body.clip_gap_sec)
             plan.append((aid, _name(aid), it, at))
+    elif body.distribute == "folder":           # 按文件夹一对一：剧文件夹1→账号1、文件夹2→账号2…
+        folders, fmap = [], {}
+        for it in items:                        # 文件夹按 items 顺序(已按剧名+集数排)首次出现记序
+            fn = Path(it.video_path).parent.name
+            if fn not in fmap:
+                fmap[fn] = len(folders)
+                folders.append(fn)
+        slot_of = {}                            # 每账号内的第几条(排作品间隔用)
+        for it in items:
+            ai = fmap[Path(it.video_path).parent.name] % A    # 文件夹多于账号→轮回分派
+            aid = targets[ai]
+            ci = slot_of.get(aid, 0)
+            slot_of[aid] = ci + 1
+            at = base + timedelta(seconds=ai * body.acct_gap_sec + ci * body.clip_gap_sec)
+            plan.append((aid, _name(aid), it, at))
     else:                                       # multi=每号发全部 / one2one=平摊
         for ai, aid in enumerate(targets):
             my = [items[i] for i in range(len(items)) if i % A == ai] \
@@ -2017,6 +2230,45 @@ def api_channels_preview(body: UploadBody):
     return {"accounts": len(targets), "count": len(plan), "rows": rows[:200]}
 
 
+# ---- 发布前敏感词检查：踩词会白传一遍视频才被拒，发前本地过一遍省时间 ----
+_SENS_FILE = DATA / "sensitive_words.txt"          # 一行一个词，用户可自己加
+_SENS_DEFAULT = [
+    # 广告法极限词(视频号常拒)
+    "最便宜", "全网第一", "第一名", "国家级", "世界级", "顶级", "绝对", "史上最",
+    "最优秀", "最先进", "100%有效", "无副作用", "根治", "治愈", "药到病除", "秒杀全网",
+    # 导流/交易类(高危)
+    "加微信", "加V", "加v", "私聊我", "加QQ", "加群", "返利", "刷单", "兼职赚钱",
+    "日赚", "月入过万", "贷款", "代开发票", "博彩", "赌博", "彩票内幕",
+    # 违禁内容
+    "色情", "裸聊", "约炮", "一夜情", "毒品", "枪支", "爆炸物", "代孕", "办证",
+]
+
+
+def _load_sens_words():
+    words = list(_SENS_DEFAULT)
+    try:
+        if _SENS_FILE.exists():
+            for ln in _SENS_FILE.read_text(encoding="utf-8").splitlines():
+                ln = ln.strip()
+                if ln and not ln.startswith("#"):
+                    words.append(ln)
+    except Exception:
+        pass
+    return words
+
+
+def _check_sensitive(items) -> list:
+    """检查各条视频的标题/简介/话题，返回 ['视频名: 命中「词」', ...]"""
+    words = _load_sens_words()
+    hits = []
+    for it in items:
+        text = " ".join([it.title or "", it.desc or ""] + [str(t) for t in (it.tags or [])])
+        bad = [w for w in words if w and w in text]
+        if bad:
+            hits.append(f"{Path(it.video_path).stem}: 命中敏感词 {('「' + '」「'.join(bad[:5]) + '」')}")
+    return hits
+
+
 @app.post("/api/channels/upload")
 def api_channels_upload(body: UploadBody):
     targets, plan = _plan_upload(body)
@@ -2024,7 +2276,14 @@ def api_channels_upload(body: UploadBody):
         return JSONResponse({"error": "没有在线的视频号账号，请先添加/登录账号"}, status_code=400)
     if not plan:
         return JSONResponse({"error": "没有有效视频"}, status_code=400)
+    sens = _check_sensitive(body.items)
+    if sens:
+        return JSONResponse({"error": "发布前敏感词检查未通过（踩词会白传视频才被拒）：\n"
+                            + "\n".join(sens[:8])
+                            + "\n改掉标题/简介/话题里的词再发；专业术语误报可精简 data/sensitive_words.txt"},
+                            status_code=400)
     global _up_seq
+    batch = datetime.now().strftime("批次 %m-%d %H:%M:%S")     # 一次「一键分发」= 一个批次
     for aid, aname, it, at in plan:
         sched_str = at.strftime("%Y-%m-%d %H:%M") if body.time_mode == "schedule" else ""
         # @视频号 直接拼进简介（这个不用视频号选择器，纯文本）
@@ -2034,7 +2293,13 @@ def api_channels_upload(body: UploadBody):
             desc = (at_str + " " + desc) if body.ch_at_pos == "head" else (desc + " " + at_str).strip()
         _up_seq += 1
         tid = f"u{_up_seq}"
+        acc = _ch_account(aid) or {}
+        try:
+            size_mb = round(Path(it.video_path).stat().st_size / 1024 / 1024, 1)
+        except Exception:
+            size_mb = 0
         UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": aname,
+                             "account_wxid": acc.get("wxid", ""),
                              "title": it.title or Path(it.video_path).stem,
                              "video_path": it.video_path, "tags": it.tags, "desc": desc,
                              "cover_path": it.cover_path, "link": it.link, "original": it.original,
@@ -2045,9 +2310,80 @@ def api_channels_upload(body: UploadBody):
                              "publish_at": at.timestamp() if body.time_mode == "local" else 0,
                              "when": at.strftime("%m-%d %H:%M") if body.time_mode != "now" else "",
                              "status": "queued", "stage": "", "err": "",
+                             "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                             "exec_at": "", "done_at": "", "elapsed": "",
+                             "size_mb": size_mb, "batch": batch, "vtype": "视频",
                              "ts": datetime.now().strftime("%H:%M:%S")}
-        UPLOAD_QUEUE.put_nowait(tid)
+        _enqueue_upload(tid)
+    _save_upload_tasks()
     return {"ok": True, "queued": len(plan), "accounts": len(targets)}
+
+
+class PubSettingsBody(BaseModel):
+    max_concurrent: int = 3
+    show_browser: bool | None = None
+
+
+# ---- 发布后数据回查：拉各账号已发作品的播放/点赞，连续0播=限流预警 ----
+CH_STATS_FILE = DATA / "channels_stats.json"
+
+
+def _load_ch_stats() -> dict:
+    try:
+        return json.loads(CH_STATS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _stats_verdict(posts: list) -> dict:
+    """限流判定：最近3条(发布>2小时的)全是0播放 → 预警。"""
+    now = time.time()
+    mature = [p for p in posts if p.get("create_time") and now - p["create_time"] > 7200]
+    recent = mature[:3]
+    warn = bool(recent) and len(recent) >= 2 and all((p.get("read") or 0) == 0 for p in recent)
+    total_read = sum(p.get("read") or 0 for p in posts)
+    return {"warn": warn,
+            "warn_msg": "最近发布的作品播放全为0，账号可能被限流" if warn else "",
+            "total_read": total_read, "post_count": len(posts)}
+
+
+@app.get("/api/channels/stats")
+async def api_channels_stats(refresh: int = 0, account_id: str = ""):
+    """数据回查。refresh=1 现场拉取(每账号开一次后台浏览器,较慢)；否则回缓存。"""
+    stats = _load_ch_stats()
+    if refresh:
+        accts = [a for a in _ch_accounts()
+                 if (not account_id or a["id"] == account_id) and ch_online(a["id"])]
+        for a in accts:
+            r = await channels.fetch_post_stats(_ch_state(a["id"]))
+            if r.get("ok"):
+                stats[a["id"]] = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                  "name": a["name"], "posts": r["posts"],
+                                  **_stats_verdict(r["posts"])}
+            else:
+                stats.setdefault(a["id"], {})["err"] = r.get("err", "")
+                stats[a["id"]]["name"] = a["name"]
+        try:
+            CH_STATS_FILE.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return {"stats": stats}
+
+
+@app.get("/api/channels/pubsettings")
+def api_ch_pubsettings_get():
+    return {"max_concurrent": int(config.get("ch_max_concurrent", 3)),
+            "show_browser": bool(config.get("ch_show_browser", False))}
+
+
+@app.post("/api/channels/pubsettings")
+def api_ch_pubsettings_set(body: PubSettingsBody):
+    config["ch_max_concurrent"] = max(1, min(20, int(body.max_concurrent or 3)))
+    if body.show_browser is not None:
+        config["ch_show_browser"] = bool(body.show_browser)
+    _save(CONFIG_FILE, config)
+    return {"ok": True, "max_concurrent": config["ch_max_concurrent"],
+            "show_browser": bool(config.get("ch_show_browser", False))}
 
 
 class PubDraftBody(BaseModel):
@@ -2091,27 +2427,142 @@ def api_channels_retry():
     for t in UPLOAD_TASKS.values():
         if t["status"] == "failed":
             t.update(status="queued", err="", stage="")
-            UPLOAD_QUEUE.put_nowait(t["id"])
+            _enqueue_upload(t["id"])
             n += 1
+    _save_upload_tasks()
     return {"ok": True, "requeued": n}
 
 
 @app.post("/api/channels/tasks/clear")
 def api_channels_clear():
-    for tid in [k for k, t in UPLOAD_TASKS.items() if t["status"] in ("done", "failed")]:
+    for tid in [k for k, t in UPLOAD_TASKS.items() if t["status"] in ("done", "failed", "cancelled")]:
         UPLOAD_TASKS.pop(tid, None)
+    _save_upload_tasks()
     return {"ok": True}
 
 
-async def _upload_worker():
+class TaskIdsBody(BaseModel):
+    ids: list[str] = []
+
+
+@app.post("/api/channels/tasks/retry")
+def api_channels_tasks_retry(body: TaskIdsBody):
+    """立即重发/批量重发：把指定任务重新排队（失败/已取消/已完成都能重发）。"""
+    n = 0
+    for tid in body.ids:
+        t = UPLOAD_TASKS.get(tid)
+        if t and t["status"] in ("failed", "cancelled", "done"):
+            t.update(status="queued", err="", stage="", exec_at="", done_at="", elapsed="")
+            _enqueue_upload(tid)
+            n += 1
+    _save_upload_tasks()
+    return {"ok": True, "requeued": n}
+
+
+@app.post("/api/channels/tasks/pause")
+def api_channels_tasks_pause(body: TaskIdsBody):
+    """批量暂停：把还在排队的任务标记已取消（进行中的不打断）。"""
+    n = 0
+    for tid in body.ids:
+        t = UPLOAD_TASKS.get(tid)
+        if t and t["status"] == "queued":
+            t.update(status="cancelled", err="手动取消")
+            n += 1
+    _save_upload_tasks()
+    return {"ok": True, "cancelled": n}
+
+
+@app.post("/api/channels/tasks/delete")
+def api_channels_tasks_delete(body: TaskIdsBody):
+    """批量删除记录（进行中的不删）。"""
+    n = 0
+    for tid in body.ids:
+        t = UPLOAD_TASKS.get(tid)
+        if t and t["status"] != "running":
+            UPLOAD_TASKS.pop(tid, None)
+            n += 1
+    _save_upload_tasks()
+    return {"ok": True, "deleted": n}
+
+
+@app.get("/api/channels/tasks/export")
+def api_channels_tasks_export():
+    """导出记录 CSV。"""
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ID", "账号", "账号ID", "标题", "简介", "状态", "失败原因", "批次",
+                "创建时间", "执行时间", "完成时间", "用时", "定时", "类型", "文件", "大小MB"])
+    stmap = {"queued": "排队中", "running": "上传中", "done": "已同步", "failed": "失败", "cancelled": "已取消"}
+    for t in UPLOAD_TASKS.values():
+        w.writerow([t["id"], t.get("account_name", ""), t.get("account_wxid", ""),
+                    t.get("title", ""), t.get("desc", ""), stmap.get(t["status"], t["status"]),
+                    t.get("err", ""), t.get("batch", ""), t.get("created", ""),
+                    t.get("exec_at", ""), t.get("done_at", ""), t.get("elapsed", ""),
+                    t.get("schedule", "") or t.get("when", "") or "立即",
+                    t.get("vtype", "视频"), t.get("video_path", ""), t.get("size_mb", "")])
+    data = "﻿" + buf.getvalue()      # BOM 让 Excel 正确识别中文
+    return Response(content=data, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=upload_tasks.csv"})
+
+
+def _up_sem() -> asyncio.Semaphore:
+    """全局并发闸：最多 ch_max_concurrent 个账号同时上传（默认3）。事件循环里懒创建。"""
+    global UP_SEM
+    if UP_SEM is None:
+        try:
+            n = int(config.get("ch_max_concurrent", 3))
+        except Exception:
+            n = 3
+        UP_SEM = asyncio.Semaphore(max(1, n))
+    return UP_SEM
+
+
+def _enqueue_upload(tid: str):
+    """把一条上传任务派到它所属账号的队列，并确保该账号的工人在跑。
+    不同账号 → 不同工人 → 并行；同账号 → 同一工人 → 串行+间隔。
+    【关键】同步端点在线程池里跑，那里没有事件循环 + asyncio.Queue 非线程安全，
+    所以队列操作和建 worker 都必须回到主循环线程执行。"""
+    def _do():
+        t = UPLOAD_TASKS.get(tid)
+        if not t:
+            return
+        aid = t.get("account_id") or "_"
+        q = UP_ACCT_QUEUES.get(aid)
+        if q is None:
+            q = asyncio.Queue()
+            UP_ACCT_QUEUES[aid] = q
+        q.put_nowait(tid)
+        w = UP_ACCT_WORKERS.get(aid)
+        if w is None or w.done():
+            UP_ACCT_WORKERS[aid] = asyncio.create_task(_acct_upload_worker(aid))
+    try:
+        asyncio.get_running_loop()      # 已在主循环(async 端点/startup)→ 直接执行
+        _do()
+    except RuntimeError:                # 在线程池(同步端点)→ 调度回主循环，线程安全
+        if MAIN_LOOP is not None:
+            MAIN_LOOP.call_soon_threadsafe(_do)
+
+
+async def _acct_upload_worker(aid: str):
+    """单个账号的上传工人：串行处理该账号的队列，条间带随机间隔防封号。
+    真正上传时占用全局信号量 → 同时在传的账号数被压在上限内。空闲即退出（下次入队再拉起）。"""
+    q = UP_ACCT_QUEUES.get(aid)
+    if q is None:
+        return
     while True:
-        tid = await UPLOAD_QUEUE.get()
+        try:
+            tid = await asyncio.wait_for(q.get(), timeout=20)
+        except asyncio.TimeoutError:
+            UP_ACCT_WORKERS.pop(aid, None)     # 空闲20秒无任务→退出，省资源
+            return
         t = UPLOAD_TASKS.get(tid)
         if not t or t["status"] != "queued":
             continue
-        aid = t.get("account_id")
-        if not aid or not ch_online(aid):
-            t.update(status="failed", err="该账号未登录")
+        if not aid or aid == "_" or not ch_online(aid):
+            t.update(status="failed", err="该账号未登录",
+                     done_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            _save_upload_tasks()
             continue
         pa = t.get("publish_at") or 0     # 本机定时：软件等到点再发
         if pa:
@@ -2122,25 +2573,62 @@ async def _upload_worker():
                 t["stage"] = f"本机定时等待中（还 {int(wait)}s）"
                 await asyncio.sleep(min(wait, 10))
         t["status"] = "running"
+        t["exec_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _t0 = time.time()
         sched = None
         if t.get("schedule"):
             try:
                 sched = datetime.strptime(t["schedule"], "%Y-%m-%d %H:%M")
             except Exception:
                 sched = None
-        try:
-            ok, msg = await channels.upload(
-                _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
-                desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
-                link=t.get("link", ""), statement=t.get("statement", ""),
-                location=t.get("location", ""), collection=t.get("collection", ""),
-                drama=t.get("drama", ""), activity=t.get("activity", ""),
-                schedule=sched, headless=False, err_dir=DATA,
-                on_status=lambda m: t.update(stage=m))
+        async with _up_sem():             # 占用一个并发名额（离开 with 立即释放，间隔期不占名额）
+            # 【自动重试】临时性失败(网络/超时/浏览器起不来)自动重试,不用手点「立即重发」。
+            # 拒绝类(登录失效/平台拒绝/文件是空的)重试也没用,直接报,不浪费时间。
+            RETRYABLE = ("超时", "timeout", "端口", "浏览器", "未收到", "net::", "断开",
+                         "connection", "target", "closed", "启动失败")
+            FATAL = ("登录", "login", "拒绝", "空的", "不存在", "敏感")
+            ok, msg = False, ""
+            for _try in range(3):                 # 首发 + 最多2次重试
+                if _try:
+                    t.update(stage=f"发布失败({msg[:40]})，自动重试第{_try}次…")
+                    await asyncio.sleep(10 * _try)
+                try:
+                    ok, msg = await channels.upload(
+                        _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
+                        desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
+                        link=t.get("link", ""), statement=t.get("statement", ""),
+                        location=t.get("location", ""), collection=t.get("collection", ""),
+                        drama=t.get("drama", ""), activity=t.get("activity", ""),
+                        schedule=sched, headless=False, err_dir=DATA,
+                        show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
+                        on_status=lambda m: t.update(stage=m))
+                except Exception as e:
+                    ok, msg = False, str(e)[:160]
+                if ok:
+                    break
+                low = (msg or "").lower()
+                if any(k in (msg or "") or k in low for k in FATAL):
+                    break                          # 拒绝类：重试无意义
+                if not any(k in (msg or "") or k in low for k in RETRYABLE) and _try >= 1:
+                    break                          # 未知错误：只多试一次
             t.update(status="done" if ok else "failed", err="" if ok else msg, stage=msg)
-        except Exception as e:
-            t.update(status="failed", err=str(e)[:160])
-        await asyncio.sleep(3)   # 每条之间多停一会，降低风控/封号概率
+            # 被动校验：登录态失效类报错→标记账号失效
+            if not ok and ("login" in (msg or "").lower() or "登录" in (msg or "")):
+                _mark_session(aid, False)
+        _el = int(time.time() - _t0)
+        t["done_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        t["elapsed"] = (f"{_el//60}分{_el%60}秒" if _el >= 60 else f"{_el}秒")
+        _save_upload_tasks()
+        # 防封号：同账号条间随机间隔（默认 30~90 秒，可调；只在该账号还有待发时才等）
+        gap = config.get("ch_gap_range") or [30, 90]
+        try:
+            lo, hi = int(gap[0]), int(gap[1])
+        except Exception:
+            lo, hi = 30, 90
+        if not q.empty() and hi > 0:
+            wait_s = random.randint(min(lo, hi), max(lo, hi))
+            t["stage"] = f"防封号间隔：等待 {wait_s}s 再发下一条"
+            await asyncio.sleep(wait_s)
 
 
 # ==================== 视频去重处理（ffmpeg 滤镜链） ====================
@@ -2283,6 +2771,8 @@ def _purge_expired_drafts():
 class JyComposeBody(BaseModel):
     template: str
     clips_folder: str = ""       # 空 = 去重导出文件夹
+    clip_paths: list[str] = []   # 从下载库勾选的多个文件夹里的视频路径（优先于 clips_folder 扫描）
+    sequential: bool = False     # 按集数顺序每 n_clips 集一个草稿(1-3、4-6…)，自动覆盖全部
     out_prefix: str = "混剪"
     count: int = 1
     mode: str = "count"          # count 固定N条 / duration 按时长
@@ -2296,10 +2786,11 @@ async def _jy_compose_bg(body: "JyComposeBody"):
     JY.update(running=True, status="开始…", made=[], error="")
     try:
         folder = body.clips_folder or str(_dedup_out_dir())
+        clip_paths = body.clip_paths if (not body.clips_folder and body.clip_paths) else None
         made = await asyncio.to_thread(
             jianying.compose_batch, body.template, folder, body.out_prefix,
             body.count, body.mode, body.n_clips, body.target_sec,
-            (body.speed_min, body.speed_max), lambda m: JY.update(status=m))
+            (body.speed_min, body.speed_max), lambda m: JY.update(status=m), clip_paths, body.sequential)
         _mark_jy_gen(made, "mix")                # 记进"本工具生成"，供定时删除
         JY.update(made=made, status=f"完成，生成 {len(made)} 个草稿（打开剪映查看）")
     except Exception as e:
@@ -2322,6 +2813,256 @@ async def api_jy_compose(body: JyComposeBody):
 @app.get("/api/jy/status")
 def api_jy_status():
     return JY
+
+
+# ---------------- ffmpeg 纯代码去重导出（绕开剪映，直接出 mp4） ----------------
+FD = {"running": False, "status": "", "made": [], "error": ""}
+FD_TASKS = {}                                  # 去重任务记录 {name: {...}}
+_fd_seq = 0
+_fd_lock = threading.Lock()                    # 并发渲染时 FD_TASKS 写盘加锁
+FD_TASKS_FILE = DATA / "dedup_tasks.json"
+
+
+def _save_fd_tasks():
+    try:
+        FD_TASKS_FILE.write_text(json.dumps(list(FD_TASKS.values())[-500:], ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_fd_tasks():
+    global _fd_seq
+    try:
+        if not FD_TASKS_FILE.exists():
+            return
+        for t in json.loads(FD_TASKS_FILE.read_text(encoding="utf-8")):
+            if t.get("status") in ("queued", "running"):
+                t["status"] = "cancelled"
+                t["err"] = t.get("err") or "软件重启，任务中断(将自动续跑)"
+            # 【清垃圾】被中断/失败的任务留下的 <10KB 空壳输出和 .part 残片删掉——
+            # 0字节假视频混进发布流程会白等8分钟超时(用户拿它当真视频发，怎么发都失败)
+            if t.get("status") in ("cancelled", "failed"):
+                try:
+                    o = t.get("out") or ""
+                    if o and os.path.exists(o) and os.path.getsize(o) < 10240:
+                        os.remove(o)
+                    if o.lower().endswith(".mp4"):
+                        pt = o[:-4] + ".part.mp4"
+                        if os.path.exists(pt):
+                            os.remove(pt)
+                except OSError:
+                    pass
+            FD_TASKS[t["id"]] = t
+            try:
+                _fd_seq = max(_fd_seq, int(str(t["id"]).lstrip("f")))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _fd_on_task(rec):
+    """ffdedup 每条成品生命周期回调 → 落进 FD_TASKS。并发线程调用，加锁。"""
+    global _fd_seq
+    with _fd_lock:
+        tid = FD.get("_id_map", {}).get(rec["name"])
+        if not tid:
+            _fd_seq += 1
+            tid = f"f{_fd_seq}"
+            FD.setdefault("_id_map", {})[rec["name"]] = tid
+            FD_TASKS[tid] = {"id": tid, "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                             "batch": FD.get("_batch", "")}
+        t = FD_TASKS[tid]
+        t.update(name=rec["name"], coll=rec.get("coll", ""), eps=rec.get("eps", 0),
+                 out=rec.get("out", ""), status=rec["status"], err=rec.get("err", ""),
+                 size_mb=rec.get("size_mb", 0), elapsed=rec.get("elapsed", ""),
+                 dur=rec.get("dur", ""), fp=rec.get("fp"))
+        if rec["status"] == "running" and not t.get("exec_at"):
+            t["exec_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if rec["status"] in ("done", "failed"):
+            t["done_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _save_fd_tasks()
+
+
+class FdBody(BaseModel):
+    """cfg = {bands:{band_h,opacity,top:{enable,folder},bottom:{...}}, color:{brightness/contrast/saturation/sharpen/hue:[lo,hi]},
+    speed:[lo,hi], crop:[lo,hi], mirror_prob, noise, stickers:{...}, bgm:{enable,folder,volume:[lo,hi]}}"""
+    clip_paths: list[str] = []
+    per: int = 3
+    count: int = 0                # 0=全部
+    prefix: str = "去重"
+    out_dir: str = ""             # 空=剪映成片输出文件夹(jy_output_dir)
+    concurrency: int = 2          # 同时渲染几条成品
+    variants: int = 1             # 每条成品渲染几个随机变体(多账号各发一个,指纹互不相同)
+    cfg: dict = {}
+
+
+FD_PENDING_FILE = DATA / "dedup_pending.json"   # 正在跑的渲染请求(软件重启后自动续跑)
+
+
+async def _fd_bg(body: "FdBody", resume: bool = False):
+    FD.update(running=True, status=("续跑上次中断的批次…" if resume else "开始…"), made=[], error="",
+              _id_map={}, _batch=datetime.now().strftime("批次 %m-%d %H:%M:%S"))
+    # 把请求落盘：批次没跑完软件就被关/重启时，下次启动自动续跑(已完成的成品跳过)
+    try:
+        FD_PENDING_FILE.write_text(json.dumps(
+            body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+            ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        out_dir = (body.out_dir or "").strip() or config.get("jy_output_dir") or str(_dedup_out_dir())
+        made = await asyncio.to_thread(
+            ffdedup.dedup_batch, body.clip_paths, body.cfg, out_dir,
+            body.per, body.count, body.prefix,
+            lambda m: FD.update(status=m), _fd_on_task, max(1, int(body.concurrency or 2)),
+            resume,                                   # resume=True → 已存在成品跳过，只补缺
+            max(1, int(body.variants or 1)))          # 每条成品渲染N个随机变体
+        FD.update(made=made, status=f"完成，导出 {len(made)} 个成品到 {out_dir}")
+    except Exception as e:
+        FD.update(error=str(e)[:200], status=f"出错：{str(e)[:150]}")
+        log_err(f"ffmpeg去重出错: {e}")
+    finally:
+        FD["running"] = False
+        try:
+            FD_PENDING_FILE.unlink()                  # 正常跑完(或明确失败)就清掉，不再续跑
+        except OSError:
+            pass
+
+
+def _fd_resume_pending():
+    """启动时检查上次没跑完的去重批次，自动续跑(已完成的成品跳过，只补没渲染完的)。"""
+    try:
+        if not FD_PENDING_FILE.exists():
+            return
+        data = json.loads(FD_PENDING_FILE.read_text(encoding="utf-8"))
+        body = FdBody(**data)
+        if not body.clip_paths:
+            FD_PENDING_FILE.unlink()
+            return
+        print(f"[FD] 检测到上次中断的去重批次({len(body.clip_paths)}集)，自动续跑", flush=True)
+        asyncio.create_task(_fd_bg(body, resume=True))
+    except Exception as e:
+        log_err(f"去重批次续跑失败: {e}")
+        try:
+            FD_PENDING_FILE.unlink()
+        except OSError:
+            pass
+
+
+@app.post("/api/ffdedup/render")
+async def api_ffdedup_render(body: FdBody):
+    if FD["running"]:
+        return {"ok": True, "already": True}
+    if not body.clip_paths:
+        return JSONResponse({"error": "先在上面勾选素材文件夹"}, status_code=400)
+    b = body.cfg.get("bands") or {}
+    for key, cn in (("top", "上"), ("bottom", "下")):
+        bb = b.get(key) or {}
+        if bb.get("enable") and not (bb.get("folder") or "").strip():
+            return JSONResponse({"error": f"{cn}方蒙版已启用，请先选它的素材文件夹"}, status_code=400)
+    bg = body.cfg.get("bgm") or {}
+    if bg.get("enable") and not (bg.get("folder") or "").strip():
+        return JSONResponse({"error": "背景音乐已启用，请先选音乐文件夹"}, status_code=400)
+    asyncio.create_task(_fd_bg(body))
+    return {"ok": True}
+
+
+@app.get("/api/ffdedup/status")
+def api_ffdedup_status():
+    counts = {k: 0 for k in ("running", "done", "failed", "cancelled")}
+    for t in FD_TASKS.values():
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    tasks = list(FD_TASKS.values())[-500:]
+    tasks.reverse()
+    return {"running": FD["running"], "status": FD["status"], "made": FD["made"],
+            "error": FD["error"], "counts": counts, "tasks": tasks}
+
+
+@app.post("/api/ffdedup/tasks/delete")
+def api_ffdedup_tasks_delete(body: TaskIdsBody):
+    n = 0
+    for tid in body.ids:
+        t = FD_TASKS.get(tid)
+        if t and t["status"] != "running":
+            FD_TASKS.pop(tid, None)
+            n += 1
+    _save_fd_tasks()
+    return {"ok": True, "deleted": n}
+
+
+@app.post("/api/ffdedup/tasks/clear")
+def api_ffdedup_tasks_clear():
+    for tid in [k for k, t in FD_TASKS.items() if t["status"] in ("done", "failed", "cancelled")]:
+        FD_TASKS.pop(tid, None)
+    _save_fd_tasks()
+    return {"ok": True}
+
+
+@app.get("/api/ffdedup/tasks/export")
+def api_ffdedup_tasks_export():
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ID", "成品名", "合集", "集数", "状态", "失败原因", "批次", "创建", "完成", "用时", "大小MB", "文件"])
+    stmap = {"running": "处理中", "done": "成功", "failed": "失败", "cancelled": "已取消"}
+    for t in FD_TASKS.values():
+        w.writerow([t["id"], t.get("name", ""), t.get("coll", ""), t.get("eps", ""),
+                    stmap.get(t["status"], t["status"]), t.get("err", ""), t.get("batch", ""),
+                    t.get("created", ""), t.get("done_at", ""), t.get("elapsed", ""),
+                    t.get("size_mb", ""), t.get("out", "")])
+    return Response(content="﻿" + buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=dedup_tasks.csv"})
+
+
+class FdCfgBody(BaseModel):
+    cfg: dict = {}
+
+
+@app.get("/api/ffdedup/cfg")
+def api_ffdedup_cfg_get():
+    return {"cfg": config.get("ffdedup_cfg") or {}}
+
+
+@app.get("/api/ffdedup/outdir")
+def api_ffdedup_outdir():
+    """去重成品实际落地的输出目录（视频号发布"添加视频"默认定位到这里）。
+    优先用"一键去重导出"页设的"导出到"(ffdedup_cfg.fd_out)，与实际落地一致。"""
+    fc = config.get("ffdedup_cfg") or {}
+    d = ((fc.get("fd_out") or "").strip()
+         or (config.get("jy_output_dir") or "").strip()
+         or str(_dedup_out_dir()))
+    return {"path": d}
+
+
+@app.get("/api/ffdedup/videos")
+def api_ffdedup_videos():
+    """列出导出目录里的去重成品(按合集子文件夹分组)，供视频号发布直接挑选。"""
+    fc = config.get("ffdedup_cfg") or {}
+    root = ((fc.get("fd_out") or "").strip()
+            or (config.get("jy_output_dir") or "").strip()
+            or str(_dedup_out_dir()))
+    out = []
+    p = Path(root)
+    if p.exists():
+        for f in p.rglob("*.mp4"):
+            if not f.is_file() or f.name.endswith(".part"):
+                continue
+            parts = list(f.relative_to(p).parts[:-1])
+            out.append({"path": str(f), "name": f.name,
+                        "blogger": parts[0] if parts else "导出根目录",
+                        "mix": parts[1] if len(parts) >= 2 else "",
+                        "size": round(f.stat().st_size / 1024 / 1024, 1),
+                        "mtime": f.stat().st_mtime})
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return {"videos": out[:800], "root": root}
+
+
+@app.post("/api/ffdedup/cfg")
+def api_ffdedup_cfg_set(body: FdCfgBody):
+    config["ffdedup_cfg"] = body.cfg or {}
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
 
 
 # ---------------- 做剪映模版：读基准草稿的效果层 + 勾选保留生成新模版 ----------------
@@ -2348,9 +3089,17 @@ class JyCompose2Body(BaseModel):
     tx/ty:[lo,hi], volume:[lo,hi], flip_prob:0~1, mask_on:bool, mask:{width/feather/centerX/centerY:[lo,hi]},
     value:[lo,hi](特效强度/滤镜), params:{brightness:[lo,hi],...}(调整)}
     cfg.extra_overlays = {count:N, alpha/scale/tx/ty/mask 同上} —— 次轨道加几层视频
-    cfg.bgm = {enable:bool, volume:[lo,hi]} —— 素材库音乐随机选
-    cfg.speed=[lo,hi] cfg.n_clips/mode/target_sec 同老混剪; cfg.library=素材库文件夹"""
-    template: str
+    cfg.global = {duration_min:15} —— 全局时长(分钟)，上下蒙版循环拼到这里、草稿总时长随之
+    cfg.bands = {top/bottom:{enable,mask_on,alpha,scale,x,y,rotation,mask:{...}}} —— 上下蒙版视频
+    cfg.bgm = {enable, folder:背景音乐文件夹, volume:[lo,hi]} —— 有文件夹用文件夹，否则用素材库
+    cfg.stickers = {enable, scale:[lo,hi], alpha:[lo,hi]} —— 贴纸层大小/不透明度随机
+    cfg.fx = {enable, strength:[lo,hi]} —— 特效(广角)强度随机
+    cfg.filter = {enable, value:[lo,hi]} —— 滤镜强度随机
+    cfg.adjust = {enable, brightness/sharpen/clear/particle/contrast/saturation:[lo,hi], hue_jitter:N}
+                 —— 调节各项小幅随机 + HSL色相每通道±N抖动
+    cfg.speed=[lo,hi] cfg.n_clips/mode/target_sec 同老混剪; cfg.library=素材库文件夹
+    template 已废弃：效果源改用软件自带的 base_shell，不再依赖剪映里的某个草稿。"""
+    template: str = ""          # 已忽略，仅为兼容旧前端保留
     out_prefix: str = "去重"
     count: int = 1
     cfg: dict = {}
@@ -2369,6 +3118,36 @@ async def _jy_compose2_bg(body: "JyCompose2Body"):
         log_err(f"剪映模版生成出错: {e}")
     finally:
         JY["running"] = False
+
+
+class JyTplCfgBody(BaseModel):
+    cfg: dict = {}
+
+
+@app.get("/api/jy/tpl_cfg")
+def api_jy_tpl_cfg_get():
+    return {"cfg": config.get("jy_tpl_cfg") or {}}
+
+
+@app.post("/api/jy/tpl_cfg")
+def api_jy_tpl_cfg_set(body: JyTplCfgBody):
+    """做剪映模版页的设置持久化（蒙版设置等），重启还在。"""
+    config["jy_tpl_cfg"] = body.cfg or {}
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
+
+
+@app.get("/api/jy/mix_cfg")
+def api_jy_mix_cfg_get():
+    return {"cfg": config.get("jy_mix_cfg") or {}}
+
+
+@app.post("/api/jy/mix_cfg")
+def api_jy_mix_cfg_set(body: JyTplCfgBody):
+    """剪映混剪页的设置持久化（按集数顺序/每N集/变速/命名/勾选的下载库文件夹等）。"""
+    config["jy_mix_cfg"] = body.cfg or {}
+    _save(CONFIG_FILE, config)
+    return {"ok": True}
 
 
 class JyOutDirBody(BaseModel):
@@ -2435,8 +3214,15 @@ async def api_jy_compose2(body: JyCompose2Body):
         return {"ok": True, "already": True}
     if not jianying.find_install_dir():
         return JSONResponse({"error": "没检测到剪映专业版，请先装剪映"}, status_code=400)
-    if not (body.cfg.get("library") or "").strip():
-        return JSONResponse({"error": "先填素材库文件夹"}, status_code=400)
+    # 主素材库已取消，改校验上下蒙版各自的素材文件夹（启用的必须有文件夹）
+    bands = body.cfg.get("bands") or {}
+    top, bot = bands.get("top") or {}, bands.get("bottom") or {}
+    if not top.get("enable") and not bot.get("enable"):
+        return JSONResponse({"error": "上下方视频至少启用一个"}, status_code=400)
+    if top.get("enable") and not (top.get("folder") or "").strip():
+        return JSONResponse({"error": "「上方视频」已启用，请先选它的素材文件夹"}, status_code=400)
+    if bot.get("enable") and not (bot.get("folder") or "").strip():
+        return JSONResponse({"error": "「下方视频」已启用，请先选它的素材文件夹"}, status_code=400)
     asyncio.create_task(_jy_compose2_bg(body))
     return {"ok": True}
 
