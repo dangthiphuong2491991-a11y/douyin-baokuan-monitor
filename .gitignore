@@ -29,3 +29,8 @@ electron/authmat.json
 electron/capture.jsonl
 electron/sdk_dump/
 视频号发布协议-抓包实录.md
+
+# 差量更新构建产物(清单/内容池/构建日志,不入库)
+update_manifest*.json
+update_pool_delta/
+_build_*.log

@@ -104,31 +104,52 @@ function waitPort(port, cb, tries = 80) {
   });
 }
 
+// 只负责 spawn 后端进程(存到模块变量 backend)。启动 + 差量更新重启都复用它。
+function _spawnBackend() {
+  // 【关键】强制 UTF-8：否则后端进程会把中文路径(如"7月10日去重模板")编码成"?"，
+  // 而"?"是 Windows 非法文件名字符 → 生成草稿时 [Errno 22] Invalid argument
+  // BAOKUAN_VER：让后端显示 Electron 外壳的版本(app.getVersion)，界面版本号才和安装包一致
+  const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', BAOKUAN_VER: app.getVersion() });
+  let cmd, args, cwd;
+  if (app.isPackaged) {
+    // 打包后：跑塞进 resources 的无窗口后端 exe（backend.spec 打的 onedir，含自带 Chromium）。
+    const be = path.join(process.resourcesPath, 'backend', 'backend.exe');
+    cmd = be; args = []; cwd = path.dirname(be);
+  } else {
+    cmd = process.platform === 'win32' ? 'python' : 'python3';
+    args = ['-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(PORT)];
+    cwd = ROOT;
+  }
+  backend = spawn(cmd, args, { cwd, windowsHide: true, env });
+  backend.stdout.on('data', d => console.log('[py]', d.toString().trim()));
+  backend.stderr.on('data', d => console.log('[py]', d.toString().trim()));
+  backend.on('error', e => console.log('[py] spawn error', String(e)));
+}
+
 function startBackend() {
   waitPort(PORT, (up) => {
     if (up) { createWindow(); return; }          // 已有后端在跑就直接用
-    // 【关键】强制 UTF-8：否则后端进程会把中文路径(如"7月10日去重模板")编码成"?"，
-    // 而"?"是 Windows 非法文件名字符 → 生成草稿时 [Errno 22] Invalid argument
-    // BAOKUAN_VER：让后端显示 Electron 外壳的版本(app.getVersion)，界面版本号才和安装包一致
-    const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', BAOKUAN_VER: app.getVersion() });
-    let cmd, args, cwd;
-    if (app.isPackaged) {
-      // 打包后：跑塞进 resources 的无窗口后端 exe（backend.spec 打的 onedir，含自带 Chromium）。
-      // 不依赖用户机器装 Python；视频号发布仍走这个后端里的 channels.py + 自带 Chromium，行为不变。
-      const be = path.join(process.resourcesPath, 'backend', 'backend.exe');
-      cmd = be; args = []; cwd = path.dirname(be);
-    } else {
-      // 开发：还是直接跑源码后端（需本机 Python）
-      cmd = process.platform === 'win32' ? 'python' : 'python3';
-      args = ['-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(PORT)];
-      cwd = ROOT;
-    }
-    backend = spawn(cmd, args, { cwd, windowsHide: true, env });
-    backend.stdout.on('data', d => console.log('[py]', d.toString().trim()));
-    backend.stderr.on('data', d => console.log('[py]', d.toString().trim()));
-    backend.on('error', e => console.log('[py] spawn error', String(e)));
+    _spawnBackend();
     waitPort(PORT, () => createWindow());
   });
+}
+
+// 端口"变空"再回调(和 waitPort 相反)——差量更新停后端后,等 8790 真释放再替换文件。
+function _waitPortFree(port, cb, tries = 40) {
+  const s = net.connect({ port, host: '127.0.0.1' });
+  s.on('connect', () => { s.destroy(); if (tries <= 0) return cb(); setTimeout(() => _waitPortFree(port, cb, tries - 1), 400); });
+  s.on('error', () => { s.destroy(); cb(); });
+}
+// 差量更新用：停后端(kill backend.exe,等端口释放,好替换被占用的文件)
+function stopBackendProc() {
+  return new Promise((resolve) => {
+    try { if (backend && !backend.killed) backend.kill(); } catch (e) {}
+    _waitPortFree(PORT, resolve);
+  });
+}
+// 差量更新用：替换完文件后重新拉起后端(等端口起来)
+function restartBackendProc() {
+  return new Promise((resolve) => { _spawnBackend(); waitPort(PORT, resolve); });
 }
 
 function createWindow() {
@@ -328,18 +349,39 @@ async function checkUpdateOnStartup() {
   const cur = app.getVersion();
   // desktop_* 是 Electron 安装版专用字段（和 pywebview 老版的 version/exe_url 分开，互不干扰）
   const latest = info.desktop_version || info.version;
-  const setupUrl = info.desktop_setup_url || info.setup_url;
-  if (!setupUrl || !_verGt(latest, cur)) { console.log('[upd] 已是最新', cur, 'vs', latest); return; }
-  const r = await dialog.showMessageBox(win, {
-    type: 'info', buttons: ['现在更新', '以后再说'], defaultId: 0, cancelId: 1,
-    title: '发现新版本',
-    message: `发现新版本 v${latest}（当前 v${cur}）`,
-    detail: (info.desktop_notes || info.notes || '') + '\n\n点“现在更新”会下载安装包并自动重装，你的下载视频/设置/登录都不受影响。',
-  });
-  if (r.response !== 0) return;
-  try { await downloadAndRunInstaller(setupUrl, latest); }
-  catch (e) {
-    dialog.showMessageBox(win, { type: 'error', title: '更新失败', message: '自动更新失败', detail: String(e).slice(0, 200) + '\n\n可稍后重启再试，或到发布页手动下载安装。' });
+  if (!_verGt(latest, cur)) { console.log('[upd] 已是最新', cur, 'vs', latest); return; }
+
+  // 整包安装(差量不满足/失败时回退):弹框征询→下整包→静默重装
+  const onFullInstaller = async (reason) => {
+    console.log('[upd] 整包安装, 原因:', reason);
+    const setupUrl = info.desktop_setup_url || info.setup_url;
+    if (!setupUrl) return { mode: 'full-skip' };
+    const r = await dialog.showMessageBox(win, {
+      type: 'info', buttons: ['现在更新', '以后再说'], defaultId: 0, cancelId: 1,
+      title: '发现新版本', message: `发现新版本 v${latest}（当前 v${cur}）`,
+      detail: (info.desktop_notes || info.notes || '') + '\n\n点“现在更新”会下载安装包并自动重装，你的下载视频/设置/登录都不受影响。',
+    });
+    if (r.response !== 0) return { mode: 'full-cancel' };
+    try { await downloadAndRunInstaller(setupUrl, latest); }
+    catch (e) { dialog.showMessageBox(win, { type: 'error', title: '更新失败', message: '自动更新失败', detail: String(e).slice(0, 200) + '\n\n可稍后重启再试，或到发布页手动下载安装。' }); }
+    return { mode: 'full' };
+  };
+
+  // 差量优先:只下改动的 backend 文件、就地替换、重启后端(不用整包重装)。任何环节不满足→onFullInstaller 兜底。
+  try {
+    const updater = require('./updater');
+    const res = await updater.checkAndApply({
+      versionInfo: info, curVersion: cur, verGt: _verGt,
+      stopBackend: stopBackendProc, startBackend: restartBackendProc,
+      reloadUI: () => { try { win && win.webContents.reloadIgnoringCache(); } catch (e) {} },
+      onFullInstaller, log: (m) => console.log('[upd]', m),
+    });
+    if (res && res.mode === 'diff' && res.files > 0) {
+      try { dialog.showMessageBox(win, { type: 'info', title: '更新完成', message: `已增量更新到 v${latest}`, detail: `只下载替换了 ${res.files} 个改动文件，已就地生效，无需重装。` }); } catch (e) {}
+    }
+  } catch (e) {
+    console.log('[upd] 更新器异常 → 整包', String(e));
+    await onFullInstaller('updater-exception');
   }
 }
 
