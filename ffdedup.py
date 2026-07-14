@@ -496,57 +496,76 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
             pass
         raise RuntimeError("ffmpeg失败：" + r.stderr.decode("utf-8", "ignore")[-300:])
 
-    # ---- 片尾视频：成品渲染成功后，用第二遍把随机片尾(缩放到 9:16)接到最后 ----
-    # 对已渲染好的干净成品做——它的音频是规规矩矩的 aac 立体声，没有主链 asetrate 留下的
-    # "未知声道布局"，concat 才稳。失败也不影响已出的无片尾成品。
+    # ---- 每集结束插视频：把成品按集边界切开，每集后面(含最后一集)各插一条随机视频(9:16,不去重) ----
+    # 对已渲染好的干净成品做二次拼接——它的音频是规矩的 aac 立体声，concat 才稳；插入片段不走去重
+    # 滤镜(不盖蒙版/贴纸/调色)，原样缩放铺满 9:16。失败不影响已出的无插入成品。
     tailcfg = cfg.get("tailvid") or {}
     tail_vids = scan(tailcfg.get("folder"), _VEXT)
-    if tailcfg.get("enable") and tail_vids:
-        tv = random.choice(tail_vids)
-        tail_out = part[:-4] + ".tail.mp4"
-        main_has_a = _probe_has_audio(part)
-        tail_has_a = _probe_has_audio(tv)
+    if tailcfg.get("enable") and tail_vids and _probe_has_audio(part):
+        main_dur = _probe_dur(part) or 0.0
+        try:
+            durs = [max(0.1, _probe_dur(p)) for p in main_paths]
+        except Exception:
+            durs = []
+        # 每集在成品里的结束时刻 ≈ 累计集时长/变速 - 掐头(差一两秒无所谓，插在集之间)
+        bounds, cum = [], 0.0
+        for d in durs:
+            cum += d
+            bounds.append(cum / (spd or 1.0) - head)
+        cuts = [b for b in bounds[:-1] if 0.3 < b < main_dur - 0.3]   # 集与集之间的内部切点
+        segs, prev = [], 0.0
+        for c in cuts:
+            segs.append((prev, c)); prev = c
+        segs.append((prev, None))                                     # 最后一段到结尾
+        picks = [random.choice(tail_vids) for _ in range(len(segs))]  # 每段后插一条(随机)
+        ins_out = part[:-4] + ".ins.mp4"
 
-        def _tail_cmd(silent_tail):
-            # 片尾输入加容错：抖音等来源偶有损坏音频包，丢弃坏包+忽略错误
-            tin = ["-i", part, "-err_detect", "ignore_err", "-fflags", "+discardcorrupt", "-i", tv]
-            tfc = [f"[1:v:0]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,setsar=1,format=yuv420p[tv]",
-                   f"[0:v:0]fps=30,setsar=1,format=yuv420p[mv]"]
-            if main_has_a:
-                tfc.append("[0:a:0]aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[ma]")
-                if tail_has_a and not silent_tail:
-                    tfc.append("[1:a:0]aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[ta]")
-                else:                          # 片尾没音轨/音频损坏→补等长静音，保证片尾画面照样接上
-                    _td = _probe_dur(tv) or 3.0
-                    tin += ["-f", "lavfi", "-t", f"{_td:.2f}", "-i", "anullsrc=r=44100:cl=stereo"]
-                    tfc.append("[2:a]aformat=sample_fmts=fltp[ta]")
-                tfc.append("[mv][ma][tv][ta]concat=n=2:v=1:a=1[v][a]")
-                tmap = ["-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "128k"]
-            else:
-                tfc.append("[mv][tv]concat=n=2:v=1:a=0[v]")
-                tmap = ["-map", "[v]"]
+        def _ins_cmd(silent):
+            tin = ["-i", part]        # 输入0 = 成品
+            tfc, order = [], []
+            ii = 1                    # 下一个输入编号
+            for i, (s, e) in enumerate(segs):
+                rng = f"start={s:.3f}" + (f":end={e:.3f}" if e is not None else "")
+                tfc.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS,fps=30,setsar=1,format=yuv420p[sv{i}]")
+                tfc.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS,aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[sa{i}]")
+                order.append(f"[sv{i}][sa{i}]")
+                iv = picks[i]
+                tin += ["-err_detect", "ignore_err", "-fflags", "+discardcorrupt", "-i", iv]
+                vin = ii; ii += 1
+                tfc.append(f"[{vin}:v:0]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,setsar=1,format=yuv420p[iv{i}]")
+                if (not silent) and _probe_has_audio(iv):
+                    tfc.append(f"[{vin}:a:0]aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[ia{i}]")
+                else:                 # 插入片段没音轨/音频损坏→补等长静音，保证画面照样接上
+                    _d = _probe_dur(iv) or 3.0
+                    tin += ["-f", "lavfi", "-t", f"{_d:.2f}", "-i", "anullsrc=r=44100:cl=stereo"]
+                    ain = ii; ii += 1
+                    tfc.append(f"[{ain}:a]aformat=sample_fmts=fltp[ia{i}]")
+                order.append(f"[iv{i}][ia{i}]")
+            nseg = len(segs) * 2
+            tfc.append("".join(order) + f"concat=n={nseg}:v=1:a=1[v][a]")
             return ([FF, "-y", "-sws_flags", "fast_bilinear"] + tin
-                    + ["-filter_complex", ";".join(tfc)] + tmap + venc
-                    + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", tail_out])
+                    + ["-filter_complex", ";".join(tfc), "-map", "[v]", "-map", "[a]",
+                       "-c:a", "aac", "-b:a", "128k"] + venc
+                    + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", ins_out])
 
-        # 先带片尾原声试；失败且片尾本有音轨(可能损坏)→ 用静音再试一次，保证片尾画面一定接上
+        # 先带插入片段原声试；失败(有的抖音片尾音频损坏)→ 全部用静音再试一次，保证画面一定接上
         done = False
-        for _silent in ([False, True] if tail_has_a else [False]):
+        for _silent in (False, True):
             try:
-                tr = subprocess.run(_tail_cmd(_silent), capture_output=True, timeout=timeout_s)
-                if tr.returncode == 0 and os.path.exists(tail_out) and os.path.getsize(tail_out) > 100000:
-                    os.replace(tail_out, part)  # 片尾版替换掉无片尾成品
+                tr = subprocess.run(_ins_cmd(_silent), capture_output=True, timeout=timeout_s)
+                if tr.returncode == 0 and os.path.exists(ins_out) and os.path.getsize(ins_out) > 100000:
+                    os.replace(ins_out, part)
                     done = True
                     break
             except Exception:
                 pass
-            if os.path.exists(tail_out):
+            if os.path.exists(ins_out):
                 try:
-                    os.remove(tail_out)
+                    os.remove(ins_out)
                 except OSError:
                     pass
         if not done and on_status:
-            on_status("⚠ 片尾拼接失败，输出无片尾成品")
+            on_status("⚠ 片尾/插入拼接失败，输出无插入成品")
 
     os.replace(part, out_path)               # 完整成功才落正式名(原子替换)
     return out_path

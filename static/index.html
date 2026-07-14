@@ -850,7 +850,7 @@
             <input type="hidden" class="fdC" id="fd_bgm_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.12~0.20</div></div>
             <input type="number" class="fdC" id="fd_bgm_lo" value="0.12" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.20" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">🎬 片尾视频</div><div class="d">成品最后随机接一条视频，自动缩放成 9:16 · 从文件夹里随机选</div></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">🎬 每集后插视频</div><div class="d">每集结束都随机插一条视频（含最后一集），自动缩放 9:16、干净不去重 · 从文件夹随机选</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_tail_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_tail_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_tail_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
