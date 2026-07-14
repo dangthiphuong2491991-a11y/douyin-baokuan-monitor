@@ -5,6 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const http = require('http');
+const https = require('https');
+const os = require('os');
 const { publishOne, electronLogin, electronCheckLogin } = require('./publish');
 
 const ROOT = path.join(__dirname, '..');   // 项目根（app.py 所在）
@@ -130,6 +132,10 @@ function createWindow() {
       e.preventDefault();
     }
   });
+  // 打包安装版：启动几秒后自动检测更新（源码 dev 不自更新）
+  if (app.isPackaged) {
+    setTimeout(() => { checkUpdateOnStartup().catch((e) => console.log('[upd]', String(e))); }, 4000);
+  }
 }
 
 // 把某账号的 cookie（Playwright storage_state 文件）注入到它专属的 partition 会话
@@ -248,6 +254,113 @@ ipcMain.on('dbg', (_e, msg) => {
   console.log('[DBG]', msg);
   try { fs.appendFileSync(path.join(__dirname, 'dbg.log'), '[DBG] ' + msg + '\n'); } catch (e) {}
 });
+
+// ============ 自动更新（安装版）：每次启动检测 version.json，有新版→下载安装包→运行→退出自己 ============
+// 更新清单多源尝试：国内可达的 jsDelivr 镜像优先，再退回 GitHub raw（客户多在国内，raw 常被墙）。
+const UPDATE_MANIFEST_URLS = [
+  'https://cdn.jsdelivr.net/gh/dangthiphuong2491991-a11y/douyin-baokuan-monitor@master/version.json',
+  'https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json',
+];
+
+function _httpGetText(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error('too many redirects'));
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, { timeout: 15000, headers: { 'User-Agent': 'baokuan-updater' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(_httpGetText(new URL(res.headers.location, url).toString(), redirects + 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      let buf = '';
+      res.on('data', (d) => { buf += d; });
+      res.on('end', () => resolve(buf));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+  });
+}
+
+function _verGt(a, b) {
+  const pa = String(a).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+  }
+  return false;
+}
+
+async function checkUpdateOnStartup() {
+  let info = null;
+  for (const u of UPDATE_MANIFEST_URLS) {
+    try { info = JSON.parse(await _httpGetText(u)); if (info) break; } catch (e) { console.log('[upd] manifest 失败', u, String(e).slice(0, 60)); }
+  }
+  if (!info) { console.log('[upd] 拉不到更新信息（网络/被墙）'); return; }
+  const cur = app.getVersion();
+  // desktop_* 是 Electron 安装版专用字段（和 pywebview 老版的 version/exe_url 分开，互不干扰）
+  const latest = info.desktop_version || info.version;
+  const setupUrl = info.desktop_setup_url || info.setup_url;
+  if (!setupUrl || !_verGt(latest, cur)) { console.log('[upd] 已是最新', cur, 'vs', latest); return; }
+  const r = await dialog.showMessageBox(win, {
+    type: 'info', buttons: ['现在更新', '以后再说'], defaultId: 0, cancelId: 1,
+    title: '发现新版本',
+    message: `发现新版本 v${latest}（当前 v${cur}）`,
+    detail: (info.desktop_notes || info.notes || '') + '\n\n点“现在更新”会下载安装包并自动重装，你的下载视频/设置/登录都不受影响。',
+  });
+  if (r.response !== 0) return;
+  try { await downloadAndRunInstaller(setupUrl, latest); }
+  catch (e) {
+    dialog.showMessageBox(win, { type: 'error', title: '更新失败', message: '自动更新失败', detail: String(e).slice(0, 200) + '\n\n可稍后重启再试，或到发布页手动下载安装。' });
+  }
+}
+
+function downloadAndRunInstaller(url, ver) {
+  return new Promise((resolve, reject) => {
+    const dest = path.join(os.tmpdir(), `爆款监控_Setup_${ver}.exe`);
+    const pw = new BrowserWindow({
+      width: 460, height: 200, frame: false, resizable: false, alwaysOnTop: true,
+      backgroundColor: '#12141c', webPreferences: {},
+    });
+    pw.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+      `<body style="margin:0;background:#12141c;color:#fff;font:14px system-ui;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px">
+      <div id="t">正在下载新版 v${ver} …</div>
+      <div style="width:82%;height:12px;background:#333;border-radius:6px;overflow:hidden"><div id="b" style="height:100%;width:0;background:linear-gradient(90deg,#7c6eff,#a78bfa);transition:width .2s"></div></div>
+      <div id="p" style="font-size:12px;color:#aaa">0%</div>
+      <script>function set(pct,txt){document.getElementById('b').style.width=pct+'%';document.getElementById('p').textContent=txt}</script></body>`));
+    const setP = (pct, txt) => { try { pw.webContents.executeJavaScript(`set(${pct},${JSON.stringify(txt)})`); } catch (e) {} };
+    const fail = (e) => { try { pw.destroy(); } catch (_) {} reject(e instanceof Error ? e : new Error(String(e))); };
+
+    const doGet = (u, redirects) => {
+      if (redirects > 6) return fail(new Error('too many redirects'));
+      const lib = u.startsWith('https') ? https : http;
+      lib.get(u, { headers: { 'User-Agent': 'baokuan-updater' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume(); return doGet(new URL(res.headers.location, u).toString(), redirects + 1);
+        }
+        if (res.statusCode !== 200) { res.resume(); return fail(new Error('HTTP ' + res.statusCode)); }
+        const total = parseInt(res.headers['content-length'] || '0', 10);
+        let got = 0;
+        const f = fs.createWriteStream(dest);
+        res.on('data', (d) => {
+          got += d.length;
+          if (total) setP(Math.floor(got / total * 100), `${(got / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`);
+        });
+        res.pipe(f);
+        f.on('finish', () => f.close(() => {
+          try { if (fs.statSync(dest).size < 1000000) return fail(new Error('下载文件异常(过小)，可能网络中断')); } catch (e) { return fail(e); }
+          setP(100, '下载完成，正在静默安装并重启…');
+          // 更新场景用静默安装 /S（不再弹向导、装到原位置），--force-run 装完自动重启。
+          // 首次安装是用户手动双击 setup（那时才走选位置的向导）。
+          try { spawn(dest, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { return fail(e); }
+          setTimeout(() => { try { pw.destroy(); } catch (_) {} resolve(); app.quit(); }, 1500);
+        }));
+        f.on('error', fail);
+      }).on('error', fail);
+    };
+    doGet(url, 0);
+  });
+}
 
 app.whenReady().then(() => { startBackend(); startPublishServer(); });
 app.on('window-all-closed', () => {
