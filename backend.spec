@@ -7,9 +7,11 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('static', 'static'), ('version.json', '.')]
 binaries = []
-hiddenimports = ['app', 'channels']
+# channels_upload=纯后端视频号上传/发布(在 app.py 里条件 import,PyInstaller 静态分析抓不到，必须显式列)
+hiddenimports = ['app', 'channels', 'channels_upload']
 
-for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3', 'playwright'):
+# imageio_ffmpeg：channels_upload/ffdedup 截封面·探尺寸·去重合成都靠它自带的 ffmpeg.exe，collect_all 才会把二进制收进包
+for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3', 'playwright', 'imageio_ffmpeg'):
     try:
         d, b, h = collect_all(pkg)
         datas += d

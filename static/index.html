@@ -848,8 +848,8 @@
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_bgm_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_bgm_folder"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.12~0.20</div></div>
-            <input type="number" class="fdC" id="fd_bgm_lo" value="0.12" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.20" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.04~0.10</div></div>
+            <input type="number" class="fdC" id="fd_bgm_lo" value="0.04" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.10" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">🎬 每集后插视频</div><div class="d">每集结束都随机插一条视频（含最后一集），自动缩放 9:16、干净不去重 · 从文件夹随机选</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_tail_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_tail_folder', saveFdCfg)">📁 选择</button>
@@ -1959,7 +1959,7 @@ function buildFdCfg(){
     mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
     stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',4),
       scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
-    bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] },
+    bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.04),n('fd_bgm_hi',0.1)] },
     tailvid:{ enable:on('fd_tail_enable'), folder:f('fd_tail_folder') } };
 }
 async function runFd(btn){
@@ -2614,14 +2614,14 @@ async function xvPickDir(){
   }catch(e){ uiAlert(e.message); }
 }
 // 默认标题/话题模板（每条视频卡可单独改，批量操作可统一改）
-const XV_DEF_TITLE='点击❤左下角【免费剧集】，不花一分钱看全集';
+const XV_DEF_TITLE='点击❤左下角【免费剧集】，不花一分钱看全集#热门漫剧 #这个结局太爽了#影视综艺#免费漫剧';
 // 默认短标题：去扩展名 + 把补零的集号还原成自然写法（第01集→第1集，第01-02集→第1-2集）
 function xvTitleFromName(name){
   return (name||'').replace(/\.[^.]+$/,'')
     .replace(/第0*(\d+)(?:-0*(\d+))?集/g,(m,a,b)=> b?`第${+a}-${+b}集`:`第${+a}集`)
     .slice(0,30);
 }
-const XV_DEF_TAGS=['热门漫剧','这个结局太爽了','影视综艺','免费漫剧'];
+const XV_DEF_TAGS=[];   // 话题已并进默认短标题(XV_DEF_TITLE),这里清空避免重复/UI冗余
 function xvEpNum(name){ // 从文件名提取集数："xx_第3-4集"→3、"7.mp4"→7,没有数字排最后
   const m=name.match(/第\s*(\d+)/)||name.match(/^(\d+)/)||name.match(/(\d+)/);
   return m?parseInt(m[1]):1e9;
@@ -2657,9 +2657,9 @@ function bmTitle(el){ if(!bmGuard())return; xvMenu(el,[
   {label:'统一设置',fn:()=>titleSet('same')},{label:'批量随机',fn:()=>titleSet('rand')},
   {label:'批量顺序',fn:()=>titleSet('seq')},{label:'清空全部',fn:()=>{chPick.forEach(p=>p.title='');renderPickList();}}]); }
 async function titleSet(mode){
-  if(mode==='same'){ const v=await uiPrompt('统一短标题：',{def:chPick[0].title||''}); if(v==null)return; chPick.forEach(p=>p.title=v.slice(0,16)); }
-  else if(mode==='seq'){ const pre=await uiPrompt('前缀（序号自动加在后面）：',{def:'作品'}); if(pre==null)return; chPick.forEach((p,i)=>p.title=(pre+(i+1)).slice(0,16)); }
-  else if(mode==='rand'){ const pool=await uiPrompt('每行一个短标题，随机分配：',{placeholder:'标题A\n标题B\n标题C'}); if(pool==null)return; const arr=pool.split('\n').map(s=>s.trim()).filter(Boolean); if(arr.length) chPick.forEach(p=>p.title=arr[Math.floor(Math.random()*arr.length)].slice(0,16)); }
+  if(mode==='same'){ const v=await uiPrompt('统一短标题（原样放进去，不截断）：',{def:chPick[0].title||XV_DEF_TITLE}); if(v==null)return; chPick.forEach(p=>p.title=v); }
+  else if(mode==='seq'){ const pre=await uiPrompt('前缀（序号自动加在后面）：',{def:'作品'}); if(pre==null)return; chPick.forEach((p,i)=>p.title=pre+(i+1)); }
+  else if(mode==='rand'){ const pool=await uiPrompt('每行一个短标题，随机分配：',{placeholder:'标题A\n标题B\n标题C'}); if(pool==null)return; const arr=pool.split('\n').map(s=>s.trim()).filter(Boolean); if(arr.length) chPick.forEach(p=>p.title=arr[Math.floor(Math.random()*arr.length)]); }
   renderPickList();
 }
 // —— 封面 ——
@@ -2757,14 +2757,14 @@ function toggleChFolder(key){
   vids.forEach(v=>{
     const i=chPick.findIndex(p=>p.path===v.path);
     if(allSel){ if(i>=0) chPick.splice(i,1); }
-    else if(i<0){ chPick.push({path:v.path, name:v.name, size:v.size, title:xvTitleFromName(v.name)}); }
+    else if(i<0){ chPick.push({path:v.path, name:v.name, size:v.size, title:XV_DEF_TITLE}); }
   });
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function') chPreview();
 }
 function toggleChVid(v){
   const i=chPick.findIndex(p=>p.path===v.path);
   if(i>=0) chPick.splice(i,1);
-  else chPick.push({path:v.path, name:v.name, size:v.size, title:xvTitleFromName(v.name)});
+  else chPick.push({path:v.path, name:v.name, size:v.size, title:XV_DEF_TITLE});
   renderChVideoGrid(); renderPickList(); if(typeof chPreview==='function')chPreview();
 }
 function coverUrl(p){ return '/api/localimg?path='+encodeURIComponent(p); }

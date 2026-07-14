@@ -2813,6 +2813,138 @@ def api_channels_tasks_export():
                     headers={"Content-Disposition": "attachment; filename=upload_tasks.csv"})
 
 
+# ============ 原生发布（Electron 隐藏窗口·同一登录会话·不弹可见浏览器） ============
+_ELECTRON_PUB = "http://127.0.0.1:8791"
+
+
+async def _electron_pub_up() -> bool:
+    """Electron 原生发布服务(8791)在跑吗——在就用它(隐藏1px窗口驱动，同一登录会话，不弹浏览器)。"""
+    try:
+        async with httpx.AsyncClient(timeout=2) as c:
+            r = await c.get(_ELECTRON_PUB + "/ping")
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _resolve_drama_exportid(aid: str, drama: str) -> str:
+    """挂剧集：剧名→exportId(从缓存查)；已经是 exportId 就原样返回。"""
+    if not drama:
+        return ""
+    if drama.startswith("event/") or drama.startswith("UzF") or len(drama) > 60:
+        return drama
+    try:
+        f = _ch_lists_cache_file(aid)
+        if f.exists():
+            for d in json.loads(f.read_text(encoding="utf-8")).get("dramas", []):
+                if (d.get("name") or "").strip() == drama.strip():
+                    return d.get("exportId") or drama
+    except Exception:
+        pass
+    return drama
+
+
+async def _publish_via_electron(t: dict, aid: str) -> tuple:
+    """走 Electron 原生发布器(8791)：隐藏窗口 + 同一登录会话 + CDP 挂剧集。返回 (ok, msg)。"""
+    params = {
+        "aid": aid, "tid": t.get("id", ""),
+        "video_path": t["video_path"], "title": t.get("title", ""),
+        "tags": t.get("tags", []), "desc": t.get("desc", ""),
+        "location": t.get("location", ""),
+        "drama": _resolve_drama_exportid(aid, t.get("drama", "")),
+        "drama_title": t.get("drama_title", "") or t.get("drama", ""),
+    }
+    async with httpx.AsyncClient(timeout=None) as c:
+        r = await c.post(_ELECTRON_PUB + "/publish", json=params)
+        j = r.json()
+    return bool(j.get("ok")), (j.get("msg") or "")
+
+
+# ============ 纯后端上传+发布(逆向复刻官方SDK协议,零浏览器零点击) ============
+try:
+    import channels_upload as _CU
+    _HAS_CU = True
+except Exception as _cu_e:                      # 缺依赖等异常不阻断启动,回退老路
+    _CU, _HAS_CU = None, False
+
+_ch_auth_cache = {}                             # aid -> ChannelsAuth(cookies+设备指纹+uin)
+
+
+def _bpub_log(msg: str):
+    """纯后端发布的详细日志(便于监控/排查),落 data/backend_publish.log。"""
+    try:
+        with open(DATA / "backend_publish.log", "a", encoding="utf-8") as f:
+            f.write("[" + datetime.now().strftime("%H:%M:%S") + "] " + str(msg) + "\n")
+    except Exception:
+        pass
+
+
+async def _get_channels_auth(aid: str, force: bool = False):
+    """从 Electron /authmat 取活会话鉴权材料(cookies + finger-print-device-id + uin),缓存复用。"""
+    if not force and aid in _ch_auth_cache:
+        return _ch_auth_cache[aid]
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.post(_ELECTRON_PUB + "/authmat", json={"aid": aid})
+        j = r.json()
+    if not j.get("ok"):
+        raise RuntimeError("取会话材料失败:" + str(j.get("msg", ""))[:80])
+    cookies = {ck["name"]: ck["value"] for ck in (j.get("cookies") or [])}
+    ls = j.get("localStorage") or {}
+    fp = ls.get("_finger_print_device_id", "")
+    uin = ls.get("finder_uin", "") or cookies.get("wxuin", "")
+    auth = _CU.ChannelsAuth(cookies, fp, uin)
+    _ch_auth_cache[aid] = auth
+    return auth
+
+
+async def _publish_via_backend(t: dict, aid: str) -> tuple:
+    """纯后端发布:helper_upload_params→CDN分片上传视频/封面→post_clip_video→post_create(挂剧集)。
+    全程 httpx,不弹浏览器、不点按钮。返回 (ok, msg)。"""
+    # 组文案(短标题 + #话题 + 简介)。短标题里已含某话题就不重复追加(用户可把整段带#文案放进短标题=一字不差)。
+    caption = (t.get("title") or "")
+    for tg in (t.get("tags") or []):
+        tag = "#" + str(tg).lstrip("#")
+        if tag not in caption:
+            caption += " " + tag
+    if t.get("desc") and t["desc"] not in caption:
+        caption += "\n" + t["desc"]
+    exportid = _resolve_drama_exportid(aid, t.get("drama", ""))
+    drama = {"id": exportid, "title": (t.get("drama_title") or t.get("drama") or exportid)} if exportid else None
+    cover = t.get("cover_path") or None
+    _bpub_log(f"===== 开始纯后端发布 aid={aid} video={t.get('video_path','')}")
+    _bpub_log(f"  标题={caption[:40]!r}  剧集入参 drama={t.get('drama','')!r} title={t.get('drama_title','')!r} → 解析exportId={exportid!r}")
+    _bpub_log(f"  最终 component = {drama}")
+    for attempt in range(2):                    # 鉴权失效时刷新一次重试
+        try:
+            auth = await _get_channels_auth(aid, force=(attempt > 0))
+            _bpub_log(f"  会话: uin={auth.uin} fp={auth.fp[:10]}… cookies={list(auth.cookies.keys())}")
+        except Exception as e:
+            _bpub_log(f"  取会话失败: {e}")
+            return False, "取会话失败:" + str(e)[:100]
+        try:
+            resp = await asyncio.to_thread(
+                _CU.publish_video, auth, t["video_path"], caption, drama, False, cover,
+                lambda m: (_bpub_log("  " + m), t.update(stage=m)))
+        except Exception as e:
+            _bpub_log(f"  publish_video 异常(attempt={attempt}): {e}")
+            if attempt == 0:
+                _ch_auth_cache.pop(aid, None)
+                continue
+            return False, str(e)[:160]
+        ec = resp.get("errCode")
+        _bpub_log(f"  post_create 响应: {json.dumps(resp, ensure_ascii=False)[:300]}")
+        if ec == 0:
+            _bpub_log(f"  ✅ 发布成功 objectId={((resp.get('data') or {}).get('objectId'))}")
+            return True, ("发布成功" + (f"(已挂剧集 {drama['title']})" if drama else ""))
+        # 300xxx 类多为登录态失效 → 刷新会话再试一次
+        if attempt == 0 and (str(ec).startswith("3000") or "登录" in str(resp.get("errMsg", ""))):
+            _bpub_log("  errCode 疑似登录态失效 → 刷新会话重试")
+            _ch_auth_cache.pop(aid, None)
+            continue
+        return False, f"视频号拒绝(errCode={ec} {resp.get('errMsg', '')})"
+    return False, "发布失败(会话刷新后仍失败)"
+
+
 def _up_sem() -> asyncio.Semaphore:
     """全局并发闸：最多 ch_max_concurrent 个账号同时上传（默认3）。事件循环里懒创建。"""
     global UP_SEM
@@ -2919,16 +3051,27 @@ async def _acct_upload_worker(aid: str):
                     t.update(stage=f"发布失败({msg[:40]})，自动重试第{_try}次…")
                     await asyncio.sleep(10 * _try)
                 try:
-                    ok, msg = await channels.upload(
-                        _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
-                        desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
-                        link=t.get("link", ""), statement=t.get("statement", ""),
-                        location=t.get("location", ""), collection=t.get("collection", ""),
-                        drama=t.get("drama", ""), drama_title=t.get("drama_title", ""),
-                        activity=t.get("activity", ""),
-                        schedule=sched, headless=False, err_dir=DATA,
-                        show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
-                        on_status=lambda m: t.update(stage=m))
+                    # ①优先纯后端(逆向官方协议·httpx直传·不弹浏览器不点按钮·最快最稳)
+                    #  需要 Electron 8791 在跑(仅用它导出活会话 cookies/设备指纹,不驱动窗口)
+                    if _HAS_CU and await _electron_pub_up():
+                        t.update(stage="纯后端上传发布中(不弹浏览器)…")
+                        ok, msg = await _publish_via_backend(t, aid)
+                    # ②回退:Electron 原生窗口发布器(隐藏窗口·CDP)
+                    elif await _electron_pub_up():
+                        t.update(stage="用原生会话发布中(不弹浏览器)…")
+                        ok, msg = await _publish_via_electron(t, aid)
+                    # ③最后回退:老 Playwright
+                    else:
+                        ok, msg = await channels.upload(
+                            _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
+                            desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
+                            link=t.get("link", ""), statement=t.get("statement", ""),
+                            location=t.get("location", ""), collection=t.get("collection", ""),
+                            drama=t.get("drama", ""), drama_title=t.get("drama_title", ""),
+                            activity=t.get("activity", ""),
+                            schedule=sched, headless=False, err_dir=DATA,
+                            show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
+                            on_status=lambda m: t.update(stage=m))
                 except Exception as e:
                     ok, msg = False, str(e)[:160]
                 if ok:

@@ -23,3 +23,9 @@ logs/
 _pub_ep*.py
 _c1.mp4
 _*.png
+
+# 视频号纯后端·抓包/会话产物（含 cookie/token/账号id 或体积大，绝不入库）
+electron/authmat.json
+electron/capture.jsonl
+electron/sdk_dump/
+视频号发布协议-抓包实录.md

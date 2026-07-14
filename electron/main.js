@@ -7,7 +7,7 @@ const net = require('net');
 const http = require('http');
 const https = require('https');
 const os = require('os');
-const { publishOne, electronLogin, electronCheckLogin } = require('./publish');
+const { publishOne, electronLogin, electronCheckLogin, captureFlow, dumpUploadSdk, dumpAuthMat } = require('./publish');
 
 const ROOT = path.join(__dirname, '..');   // 项目根（app.py 所在）
 const PORT = 8790;
@@ -43,6 +43,31 @@ function startPublishServer() {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: false, msg: 'publish异常: ' + String(e).slice(0, 120) }));
         }
+      });
+    } else if (req.method === 'POST' && req.url === '/capture') {
+      // 抓包模式:只丢文件触发上传,把 preupload/分片/post_clip 报文记录到 capture.jsonl(零发布风险)
+      let buf = ''; req.on('data', (d) => { buf += d; });
+      req.on('end', async () => {
+        let params; try { params = JSON.parse(buf); } catch (e) { res.writeHead(400); res.end('{}'); return; }
+        try {
+          const r = await captureFlow(params, () => {});
+          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(r));
+        } catch (e) { res.writeHead(200); res.end(JSON.stringify({ ok: false, msg: String(e).slice(0, 160) })); }
+      });
+    } else if (req.method === 'POST' && req.url === '/authmat') {
+      let buf = ''; req.on('data', (d) => { buf += d; });
+      req.on('end', async () => {
+        let params; try { params = JSON.parse(buf); } catch (e) { res.writeHead(400); res.end('{}'); return; }
+        try { const r = await dumpAuthMat(params, () => {}); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(r)); }
+        catch (e) { res.writeHead(200); res.end(JSON.stringify({ ok: false, msg: String(e).slice(0, 160) })); }
+      });
+    } else if (req.method === 'POST' && req.url === '/dumpsdk') {
+      // 抠上传SDK源码到 sdk_dump/(逆向依据,不上传不发布)
+      let buf = ''; req.on('data', (d) => { buf += d; });
+      req.on('end', async () => {
+        let params; try { params = JSON.parse(buf); } catch (e) { res.writeHead(400); res.end('{}'); return; }
+        try { const r = await dumpUploadSdk(params, () => {}); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(r)); }
+        catch (e) { res.writeHead(200); res.end(JSON.stringify({ ok: false, msg: String(e).slice(0, 160) })); }
       });
     } else if (req.method === 'POST' && req.url === '/login') {
       let buf = ''; req.on('data', (d) => { buf += d; });
