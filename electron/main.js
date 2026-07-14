@@ -307,6 +307,8 @@ ipcMain.on('dbg', (_e, msg) => {
 // ============ 自动更新（安装版）：每次启动检测 version.json，有新版→下载安装包→运行→退出自己 ============
 // 更新清单多源尝试：国内可达的 jsDelivr 镜像优先，再退回 GitHub raw（客户多在国内，raw 常被墙）。
 const UPDATE_MANIFEST_URLS = [
+  // @latest=jsDelivr 取最新 git tag(tag 不可变、永不卡缓存)——@master 分支缓存常卡在旧版导致客户更新不了,故优先它
+  'https://cdn.jsdelivr.net/gh/dangthiphuong2491991-a11y/douyin-baokuan-monitor@latest/version.json',
   'https://cdn.jsdelivr.net/gh/dangthiphuong2491991-a11y/douyin-baokuan-monitor@master/version.json',
   'https://raw.githubusercontent.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/master/version.json',
 ];
