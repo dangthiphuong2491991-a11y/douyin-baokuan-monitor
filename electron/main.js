@@ -84,7 +84,8 @@ function startBackend() {
     if (up) { createWindow(); return; }          // 已有后端在跑就直接用
     // 【关键】强制 UTF-8：否则后端进程会把中文路径(如"7月10日去重模板")编码成"?"，
     // 而"?"是 Windows 非法文件名字符 → 生成草稿时 [Errno 22] Invalid argument
-    const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
+    // BAOKUAN_VER：让后端显示 Electron 外壳的版本(app.getVersion)，界面版本号才和安装包一致
+    const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', BAOKUAN_VER: app.getVersion() });
     let cmd, args, cwd;
     if (app.isPackaged) {
       // 打包后：跑塞进 resources 的无窗口后端 exe（backend.spec 打的 onedir，含自带 Chromium）。

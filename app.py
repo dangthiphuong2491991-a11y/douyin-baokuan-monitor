@@ -90,7 +90,11 @@ STATE_FILE = DATA / "state.json"
 PORT = 8790
 def _read_version():
     """版本号统一从 version.json 读，避免和 GitHub 上的脱节(打包时 version.json 一并进包)。
-    以前写死常量、bump 时忘改→exe 内部版本永远落后→死循环提示更新。改成读文件根治。"""
+    以前写死常量、bump 时忘改→exe 内部版本永远落后→死循环提示更新。改成读文件根治。
+    Electron 安装版由外壳用环境变量 BAOKUAN_VER 传入自己的版本(和 pywebview 渠道的 version.json 分开)。"""
+    ev = os.environ.get("BAOKUAN_VER")
+    if ev:
+        return str(ev).strip()
     try:
         import json as _json
         return str(_json.loads((BASE / "version.json").read_text(encoding="utf-8")).get("version", "1.0.16"))
