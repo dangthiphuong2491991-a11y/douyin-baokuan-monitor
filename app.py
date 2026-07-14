@@ -1956,6 +1956,30 @@ async def _ch_fetch_lists_bg(aid: str):
         CH_LISTS["running"] = False
 
 
+class DramasCacheBody(BaseModel):
+    dramas: list = []
+
+
+@app.post("/api/channels/account/{aid}/cache_dramas")
+def api_ch_cache_dramas(aid: str, body: DramasCacheBody):
+    """前端从内嵌 webview 的活会话里直接拉到剧集后，POST 过来存缓存（顺带标记登录有效）。"""
+    try:
+        f = _ch_lists_cache_file(aid)
+        d = {}
+        if f.exists():
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                d = {}
+        d["dramas"] = body.dramas or []
+        d["ts"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        _mark_session(aid, True)                 # webview 能拉到剧集 = 登录态有效
+        return {"ok": True, "count": len(d["dramas"])}
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:100]}, status_code=400)
+
+
 @app.get("/api/channels/account/{aid}/lists_cache")
 def api_ch_lists_cache(aid: str):
     """秒返回上次拉到的剧集/合集缓存(供打开选剧弹窗时立刻显示，同时后台再刷新)。"""

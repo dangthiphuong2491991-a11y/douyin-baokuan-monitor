@@ -2936,13 +2936,44 @@ function fillList(id,arr){ const dl=document.getElementById(id); if(!dl) return;
 
 /* ===== 视频号剧集选择弹窗（仿小V猫） ===== */
 let _dramaPick=null;
+// 直接在【已登录的内嵌后台 webview】的活会话里拉剧集——0.6秒出来、不用另开浏览器(仿小V猫)
+async function _fetchDramasFromWebview(aid){
+  const w=document.getElementById('wv_'+aid);
+  if(!w) return null;
+  let url=''; try{ url=(typeof w.getURL==='function')?w.getURL():(w.src||''); }catch(e){}
+  if(url.indexOf('channels.weixin.qq.com')<0 || url.indexOf('login')>=0) return null;   // 没打开/没登录
+  try{
+    const dramas=await w.executeJavaScript(`(async()=>{try{
+      const url='/cgi-bin/mmfinderassistant-bin/post/search_drama_component';
+      let all=[],cp=1,total=1;
+      while(all.length<total && cp<=80){
+        const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({currentPage:cp,pageSize:5,sceneType:3,scene:7,reqScene:7,rawKeyBuff:'',pluginSessionId:null,timestamp:String(Date.now())}),credentials:'include'});
+        const j=await r.json(); const d=(j&&j.data)||{}; total=d.totalCount||0;
+        const lst=d.list||[]; if(!lst.length) break; all=all.concat(lst); cp++;
+      }
+      return all.map(function(it){return {name:it.name||'',count:it.mediaCount||0,exportId:String(it.id||''),cover:it.coverUrl||''};});
+    }catch(e){return null;}})()`);
+    if(dramas&&dramas.length){ try{ await api('/api/channels/account/'+aid+'/cache_dramas','POST',{dramas}); }catch(e){} return dramas; }
+  }catch(e){}
+  return null;
+}
 async function openDramaPicker(){
   let list=window._chDramas||[];
   if(!list.length){
     const aid=[...chAccSel][0];
     if(!aid){ uiAlert('先在右侧「平台和账号配置」勾选一个已登录的视频号账号'); return; }
     document.getElementById('dramaSearch').value='';
-    // ① 先秒显上次的缓存（不用干等十几秒），再后台静默刷新
+    // ⓪ 最快：这个号的内嵌后台 webview 已登录 → 直接在它的活会话里拉(0.6秒,不另开浏览器)
+    try{
+      const wd=await _fetchDramasFromWebview(aid);
+      if(wd&&wd.length){
+        window._chDramas=wd;
+        _dramaPick=document.getElementById('chDrama').value||null;
+        renderDramaList(); document.getElementById('dramaModal').style.display='flex';
+        return;
+      }
+    }catch(e){}
+    // ① 秒显上次缓存，再后台静默刷新
     try{
       const c=await api('/api/channels/account/'+aid+'/lists_cache');
       if(c&&c.dramas&&c.dramas.length){ window._chDramas=c.dramas; list=c.dramas; }
@@ -2977,10 +3008,14 @@ async function openDramaPicker(){
 }
 // 后台静默刷新剧集：不打扰用户，刷到新的就更新弹窗列表
 async function _refreshDramasBg(aid){
+  const modalOpen=()=>document.getElementById('dramaModal').style.display!=='none';
   try{
     const tip=document.getElementById('dramaRefreshTip'); if(tip) tip.style.display='inline';
+    // 优先用活的 webview 会话刷（快）；没登录的 webview 才退回开浏览器
+    const wd=await _fetchDramasFromWebview(aid);
+    if(wd&&wd.length){ window._chDramas=wd; if(modalOpen()) renderDramaList(); return; }
     const d=await _fetchLists();
-    if(d&&(d.dramas||[]).length){ window._chDramas=d.dramas; if(document.getElementById('dramaModal').style.display!=='none') renderDramaList(); }
+    if(d&&(d.dramas||[]).length){ window._chDramas=d.dramas; if(modalOpen()) renderDramaList(); }
   }catch(e){}
   finally{ const tip=document.getElementById('dramaRefreshTip'); if(tip) tip.style.display='none'; }
 }
