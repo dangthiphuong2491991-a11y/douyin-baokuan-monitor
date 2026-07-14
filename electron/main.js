@@ -109,7 +109,7 @@ function _spawnBackend() {
   // 【关键】强制 UTF-8：否则后端进程会把中文路径(如"7月10日去重模板")编码成"?"，
   // 而"?"是 Windows 非法文件名字符 → 生成草稿时 [Errno 22] Invalid argument
   // BAOKUAN_VER：让后端显示 Electron 外壳的版本(app.getVersion)，界面版本号才和安装包一致
-  const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', BAOKUAN_VER: app.getVersion() });
+  const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', BAOKUAN_VER: _installedVersion() || app.getVersion() });
   let cmd, args, cwd;
   if (app.isPackaged) {
     // 打包后：跑塞进 resources 的无窗口后端 exe（backend.spec 打的 onedir，含自带 Chromium）。
@@ -330,6 +330,16 @@ function _httpGetText(url, redirects = 0) {
   });
 }
 
+// 差量更新会更新 resources/installed_manifest.json 里的 version —— 它才是"当前真实版本"。
+// (app.getVersion 读 asar 内 package.json,差量替换不了 asar,会永远停在装包时的版本 → 差量判断失效)
+function _installedVersion() {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(process.resourcesPath, 'installed_manifest.json'), 'utf-8'));
+    if (m && m.version) return String(m.version);
+  } catch (e) {}
+  return null;
+}
+
 function _verGt(a, b) {
   const pa = String(a).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
   const pb = String(b).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -346,7 +356,7 @@ async function checkUpdateOnStartup() {
     try { info = JSON.parse(await _httpGetText(u)); if (info) break; } catch (e) { console.log('[upd] manifest 失败', u, String(e).slice(0, 60)); }
   }
   if (!info) { console.log('[upd] 拉不到更新信息（网络/被墙）'); return; }
-  const cur = app.getVersion();
+  const cur = _installedVersion() || app.getVersion();   // 差量更新后的真实版本(见 _installedVersion)
   // desktop_* 是 Electron 安装版专用字段（和 pywebview 老版的 version/exe_url 分开，互不干扰）
   const latest = info.desktop_version || info.version;
   if (!_verGt(latest, cur)) { console.log('[upd] 已是最新', cur, 'vs', latest); return; }

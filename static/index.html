@@ -4126,10 +4126,15 @@ async function checkUpdate(manual){
     document.getElementById('appVer').textContent='v'+d.current;
     if(d.has_update){
       document.getElementById('updDot').style.display='inline';
-      const ok=await uiConfirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n现在自动更新？会下载新版并自动重启软件。`,'有新版本');
-      if(ok){
-        if(d.can_auto) doUpdate(d);
-        else if(d.url){ window.open(d.url,'_blank'); }   // 源码模式没法自覆盖，退回下载页
+      if(d.is_electron){
+        // Electron 安装版:真正的更新走外壳(启动自动增量),这里只提示重启即可,别走错的 pywebview 下载
+        await uiAlert(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n👉 完全关闭软件、再重新打开，就会自动更新。\n（这版起是「增量更新」：只下载改动的文件、十几MB、秒级完成，不用再等几百MB整包）`,'有新版本');
+      }else{
+        const ok=await uiConfirm(`发现新版本 v${d.latest}（当前 v${d.current}）\n${d.notes||''}\n\n现在自动更新？会下载新版并自动重启软件。`,'有新版本');
+        if(ok){
+          if(d.can_auto) doUpdate(d);
+          else if(d.url){ window.open(d.url,'_blank'); }   // 源码模式没法自覆盖，退回下载页
+        }
       }
     }else if(manual){
       toast(d.note?('当前已是最新（'+d.note+'）'):'已是最新版本 v'+d.current);
@@ -4248,6 +4253,39 @@ applyPlatformLabels();   // 按上次选择的平台初始化文案/高亮
 refresh();
 setInterval(refresh,10000);
 checkUpdate(false);   // 每次打开自动检查一次更新（静默）
+
+/* ===== 实名验证常驻提醒(不自动关):某号触发实名验证→自动停发+顶部红条+首次弹窗+一键批量重发 ===== */
+let _verifyAlerted=new Set();
+function _verifyBar(){
+  let bar=document.getElementById('verifyBar');
+  if(!bar){ bar=document.createElement('div'); bar.id='verifyBar';
+    bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#c0392b;color:#fff;padding:12px 20px;box-shadow:0 3px 16px rgba(0,0,0,.35);font:14px system-ui;display:none;line-height:1.6';
+    document.body.appendChild(bar); }
+  return bar;
+}
+async function checkVerifyBlocked(){
+  let d; try{ d=await api('/api/channels/verify_blocked'); }catch(e){ return; }
+  const list=(d&&d.blocked)||[];
+  // 新出现的被拦账号 → 弹一次醒目弹窗(告诉是哪个号)
+  for(const a of list){ if(!_verifyAlerted.has(a.aid)){ _verifyAlerted.add(a.aid);
+    uiAlert(`⚠ 账号「${a.name}」需要完成实名验证！\n\n已自动停止给这个号发布（继续发只会一直撞验证、加重风控）。\n去视频号完成实名后，点顶部红条上的「批量重发」，把暂停的视频按原设置(含随机间隔)补发。`,'需要实名验证'); } }
+  for(const aid of [..._verifyAlerted]){ if(!list.find(a=>a.aid===aid)) _verifyAlerted.delete(aid); }
+  const bar=_verifyBar();
+  if(!list.length){ bar.style.display='none'; bar.innerHTML=''; return; }
+  bar.style.display='block';
+  bar.innerHTML='<div style="font-weight:800;margin-bottom:5px">⚠ 有账号需要实名验证，已自动停止发布</div>'+
+    list.map(a=>`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:3px 0">
+      <span>账号「<b>${esc(a.name)}</b>」需完成实名验证 · 已暂停 <b>${a.blocked_count}</b> 条待发（${esc(a.at||'')}）</span>
+      <button onclick="verifyRepublish('${a.aid}',this)" style="background:#fff;color:#c0392b;border:0;border-radius:6px;padding:5px 14px;font-weight:800;cursor:pointer">✅ 我已完成实名，批量重发</button>
+    </div>`).join('');
+}
+async function verifyRepublish(aid,btn){
+  if(!await uiConfirm('确认这个号已经完成实名验证了吗？\n将把它被暂停的视频，按原来的设置(含随机间隔)重新排队发布。','批量重发'))return;
+  btn.disabled=true;
+  try{ const d=await api('/api/channels/verify_republish','POST',{aid}); toast('已重新排队 '+(d.requeued||0)+' 条,按原间隔陆续发'); await checkVerifyBlocked(); if(typeof refreshChannels==='function')refreshChannels(); }
+  catch(e){ uiAlert(e.message); btn.disabled=false; }
+}
+setInterval(checkVerifyBlocked,8000); checkVerifyBlocked();
 </script>
 </body>
 </html>

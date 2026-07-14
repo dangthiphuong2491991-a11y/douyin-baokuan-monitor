@@ -2465,6 +2465,7 @@ def api_channels_upload(body: UploadBody):
                              "activity": body.ch_activity,
                              "schedule": sched_str,
                              "publish_at": at.timestamp() if body.time_mode == "local" else 0,
+                             "gap_base": int(body.clip_gap_sec or 0),   # 选的作品间隔(秒)→worker按此随机化条间延迟
                              "when": at.strftime("%m-%d %H:%M") if body.time_mode != "now" else "",
                              "status": "queued", "stage": "", "err": "",
                              "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2617,6 +2618,7 @@ def api_ch_matrix_upload(body: MatrixBody):
                                  "statement": "", "location": "", "collection": "",
                                  "drama": drama, "drama_title": dtitle, "activity": "",
                                  "schedule": "", "publish_at": publish_at, "when": when,
+                                 "gap_base": gap,   # 选的作品间隔(秒)→worker按此随机化条间延迟
                                  "status": "queued", "stage": "", "err": "",
                                  "created": now_s, "exec_at": "", "done_at": "", "elapsed": "",
                                  "size_mb": size_mb, "batch": batch, "vtype": "视频", "ts": hm}
@@ -2761,6 +2763,40 @@ def api_channels_tasks_retry(body: TaskIdsBody):
         if t and t["status"] in ("failed", "cancelled", "done"):
             t.update(status="queued", err="", stage="", exec_at="", done_at="", elapsed="")
             _enqueue_upload(tid)
+            n += 1
+    _save_upload_tasks()
+    return {"ok": True, "requeued": n}
+
+
+@app.get("/api/channels/verify_blocked")
+def api_channels_verify_blocked():
+    """返回被实名验证拦住的账号(前端常驻弹窗轮询它)。"""
+    out = []
+    for aid, info in CH_VERIFY_BLOCK.items():
+        cnt = sum(1 for t in UPLOAD_TASKS.values()
+                  if t.get("account_id") == aid and t.get("verify_blocked"))
+        out.append({"aid": aid, "name": info.get("name", aid), "msg": info.get("msg", ""),
+                    "at": info.get("at", ""), "blocked_count": cnt})
+    return {"blocked": out}
+
+
+class VerifyReBody(BaseModel):
+    aid: str = ""
+
+
+@app.post("/api/channels/verify_republish")
+def api_channels_verify_republish(body: VerifyReBody):
+    """用户已完成该号实名验证 → 解除拦截 + 把被暂停的任务全部按原设置(含随机间隔)重新排队。"""
+    aid = (body.aid or "").strip()
+    if not aid:
+        return {"ok": False, "msg": "缺 aid"}
+    CH_VERIFY_BLOCK.pop(aid, None)
+    n = 0
+    for t in UPLOAD_TASKS.values():
+        if t.get("account_id") == aid and t.get("verify_blocked"):
+            t.update(status="queued", err="", stage="实名后重发·排队中",
+                     verify_blocked=False, exec_at="", done_at="", elapsed="")
+            _enqueue_upload(t["id"])
             n += 1
     _save_upload_tasks()
     return {"ok": True, "requeued": n}
@@ -2936,6 +2972,9 @@ async def _publish_via_backend(t: dict, aid: str) -> tuple:
         if ec == 0:
             _bpub_log(f"  ✅ 发布成功 objectId={((resp.get('data') or {}).get('objectId'))}")
             return True, ("发布成功" + (f"(已挂剧集 {drama['title']})" if drama else ""))
+        # 实名验证类:直接报,交给上层停号 + 常驻提醒(纯后端看不到弹窗,靠 errMsg 关键词识别)
+        if _is_verify_msg(resp.get("errMsg", "")):
+            return False, "实名验证：该账号需完成实名验证才能发表（errCode=%s）" % ec
         # 300xxx 类多为登录态失效 → 刷新会话再试一次
         if attempt == 0 and (str(ec).startswith("3000") or "登录" in str(resp.get("errMsg", ""))):
             _bpub_log("  errCode 疑似登录态失效 → 刷新会话重试")
@@ -2995,6 +3034,39 @@ def _enqueue_upload(tid: str):
             MAIN_LOOP.call_soon_threadsafe(_do)
 
 
+# ==================== 实名验证拦截：某号触发实名验证 → 停该号、常驻提醒、实名后批量重发 ====================
+CH_VERIFY_BLOCK: dict = {}     # aid -> {"name","msg","at"}  被实名验证拦住的账号(前端常驻弹窗读它)
+
+
+def _is_verify_msg(msg: str) -> bool:
+    """判断一条发布失败信息是不是'需要实名验证'类(纯后端errMsg / 老Playwright的DOM检测 都覆盖)。"""
+    s = str(msg or "")
+    return any(k in s for k in ("实名验证", "实名信息核验", "身份验证", "身份核验", "安全验证", "验证弹窗"))
+
+
+def _mark_verify_block(aid: str, msg: str):
+    """标记该号被实名验证拦住 + 把它队列里还没发的任务全部暂停(标 verify_blocked，实名后可批量重发)。"""
+    acc = _ch_account(aid) or {}
+    CH_VERIFY_BLOCK[aid] = {"name": acc.get("name", aid), "msg": str(msg or "")[:80],
+                            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    for t in UPLOAD_TASKS.values():
+        if t.get("account_id") == aid and t.get("status") in ("queued", "running"):
+            t.update(status="failed", verify_blocked=True,
+                     err="⚠该账号需实名验证，已暂停（实名后可一键批量重发）",
+                     stage="等待实名验证")
+    _save_upload_tasks()
+
+
+def _rand_gap(g: int) -> int:
+    """把界面选的间隔秒数 g 转成随机秒,避免固定间隔的机器特征(防封号):
+    选 1分钟(60)→随机 40~90、2分钟(120)→80~180、依此类推(约 2/3g ~ 3/2g)。"""
+    g = int(g or 0)
+    if g <= 0:
+        return 0
+    lo, hi = round(g * 2 / 3), round(g * 3 / 2)
+    return random.randint(min(lo, hi), max(lo, hi))
+
+
 async def _acct_upload_worker(aid: str):
     """单个账号的上传工人：串行处理该账号的队列，条间带随机间隔防封号。
     真正上传时占用全局信号量 → 同时在传的账号数被压在上限内。空闲即退出（下次入队再拉起）。"""
@@ -3009,6 +3081,13 @@ async def _acct_upload_worker(aid: str):
             return
         t = UPLOAD_TASKS.get(tid)
         if not t or t["status"] != "queued":
+            continue
+        # 该号已被实名验证拦住 → 这条也别发(继续发只会一直撞验证)，标暂停等实名后批量重发
+        if aid in CH_VERIFY_BLOCK:
+            t.update(status="failed", verify_blocked=True, stage="等待实名验证",
+                     err="⚠该账号需实名验证，已暂停（实名后可一键批量重发）",
+                     done_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            _save_upload_tasks()
             continue
         # 【幂等】这条视频对这个账号已发成功过 → 直接跳过，绝不重复发(防断点续跑/重复入队重发)
         if _already_done(aid, t.get("video_path", ""), tid):
@@ -3085,19 +3164,29 @@ async def _acct_upload_worker(aid: str):
             # 被动校验：登录态失效类报错→标记账号失效
             if not ok and ("login" in (msg or "").lower() or "登录" in (msg or "")):
                 _mark_session(aid, False)
+            # 实名验证：这条发不了 + 停掉该号后续所有任务(继续发只会一直撞验证/加重风控)，前端常驻提醒
+            if not ok and _is_verify_msg(msg):
+                t["verify_blocked"] = True
+                _mark_verify_block(aid, msg)
         _el = int(time.time() - _t0)
         t["done_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         t["elapsed"] = (f"{_el//60}分{_el%60}秒" if _el >= 60 else f"{_el}秒")
         _save_upload_tasks()
-        # 防封号：同账号条间随机间隔（默认 30~90 秒，可调；只在该账号还有待发时才等）
-        gap = config.get("ch_gap_range") or [30, 90]
-        try:
-            lo, hi = int(gap[0]), int(gap[1])
-        except Exception:
-            lo, hi = 30, 90
-        if not q.empty() and hi > 0:
-            wait_s = random.randint(min(lo, hi), max(lo, hi))
-            t["stage"] = f"防封号间隔：等待 {wait_s}s 再发下一条"
+        # 防封号：同账号条间随机间隔（只在该账号还有待发时才等）
+        gb = int(t.get("gap_base") or 0)
+        if t.get("publish_at"):
+            wait_s = 0                       # 本机定时:间隔已排进 publish_at(到点发),不再重复等
+        elif gb > 0:
+            wait_s = _rand_gap(gb)           # 选了作品间隔:选值→随机秒(60→40~90),而非固定值
+        else:
+            gap = config.get("ch_gap_range") or [30, 90]   # 无间隔:防封号默认随机
+            try:
+                lo, hi = int(gap[0]), int(gap[1])
+            except Exception:
+                lo, hi = 30, 90
+            wait_s = random.randint(min(lo, hi), max(lo, hi)) if hi > 0 else 0
+        if not q.empty() and wait_s > 0:
+            t["stage"] = f"防封号间隔：随机等待 {wait_s}s 再发下一条"
             await asyncio.sleep(wait_s)
 
 
@@ -3868,12 +3957,16 @@ async def api_check_update():
         async with httpx.AsyncClient(timeout=12, follow_redirects=True) as c:
             r = await c.get(UPDATE_RAW_URL)
             info = r.json()
-        latest = str(info.get("version", VERSION))
+        # Electron 安装版(main.js 注入 BAOKUAN_VER)看 desktop_version;pywebview 老版看 version
+        is_electron = bool(os.environ.get("BAOKUAN_VER"))
+        latest = str((info.get("desktop_version") if is_electron else "") or info.get("version", VERSION))
         has = _ver_tuple(latest) > _ver_tuple(VERSION)
-        return {"current": VERSION, "latest": latest, "has_update": has,
-                "notes": info.get("notes", ""), "url": info.get("url") or RELEASE_PAGE,
+        return {"current": VERSION, "latest": latest, "has_update": has, "is_electron": is_electron,
+                "notes": (info.get("desktop_notes") if is_electron else info.get("notes")) or "",
+                "url": info.get("url") or RELEASE_PAGE,
                 "exe_url": info.get("exe_url", ""),
-                "can_auto": bool(getattr(sys, "frozen", False))}
+                # Electron 版的真正更新走外壳(启动自动增量)，不用后端 pywebview 下载
+                "can_auto": bool(getattr(sys, "frozen", False)) and not is_electron}
     except Exception as e:
         return {"current": VERSION, "latest": VERSION, "has_update": False, "error": str(e)[:80]}
 

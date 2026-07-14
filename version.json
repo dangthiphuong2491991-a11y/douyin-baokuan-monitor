@@ -3,9 +3,9 @@
   "notes": "📥 更新时有【下载进度条】了——显示已下载 MB / 百分比，不再干转圈让人以为卡死；下载失败也会明确提示。🧹 修复【更新后目录里留着两个安装包】——新版启动后台反复重试，等旧程序一退出就把旧包清掉。🔧 数据搬到系统固定目录 %LOCALAPPDATA%\\爆款监控\\（自动迁移、视频号登录和账号档案一点不丢），为下一版「客户端也能内嵌视频号后台」做准备。🚀 含上一版全部：拉剧集/发布卡死根治、窄条视频根治(setsar)、素材来源只扫下载文件夹+点进去看视频信息、导出按「时间 剧名」建一级文件夹、按剧切块不跨剧合并、贴纸默认值。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
   "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.19/BaokuanMonitor.exe",
-  "desktop_version": "1.0.22",
-  "desktop_notes": "🆕 增量更新（差量更新）：从这版起，以后更新只下载「改动过的文件」(通常十几MB)、就地替换、秒级完成，不用每次重装几百MB整包！（本次是最后一次整包更新，装好这版就享受增量了）\n🚀 含上版全部：视频号纯后端直传(不弹浏览器/不点按钮/剧集稳挂)、短标题不再砍字+默认完整文案、BGM默认0.04~0.10。数据/登录/设置不受影响。",
-  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.22/BaokuanMonitor_Setup_1.0.22.exe",
-  "update_manifest_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.22/update_manifest.json",
+  "desktop_version": "1.0.23",
+  "desktop_notes": "🆕 增量更新正式生效：装好这版后，以后更新只下载「改动过的文件」(通常十几MB)、就地替换、秒级完成，不再重装几百MB整包！（这版是最后一次整包过渡）\n⏱️ 发布间隔改成随机秒(选1分钟→实际随机40~90秒),更像真人、更防封号。\n🛡️ 遇到需要实名验证的号：自动停发+顶部常驻提醒告诉你是哪个号，实名后可一键把暂停的视频批量补发。\n🔧 修「检查更新」老显示已是最新的误导。数据/登录/设置不受影响。",
+  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.23/BaokuanMonitor_Setup_1.0.23.exe",
+  "update_manifest_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.23/update_manifest.json",
   "update_pool_base": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/updates/"
 }
