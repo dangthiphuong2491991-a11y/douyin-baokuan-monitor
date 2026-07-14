@@ -18,6 +18,7 @@ for pkg in ('f2', 'webview', 'uvicorn', 'winotify', 'browser_cookie3', 'playwrig
         pass
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += ['jsonpath_ng', 'm3u8', 'pyexecjs', 'execjs', 'gmssl', 'greenlet', 'pyee']
+hiddenimports += ['psutil', 'psutil._psutil_windows']   # 清理残留档案浏览器要用(打包必须带,否则production里无声失效)
 # 建桌面快捷方式用（pywin32）
 hiddenimports += ['pythoncom', 'pywintypes', 'win32com', 'win32com.client', 'win32api']
 

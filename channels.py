@@ -10,6 +10,43 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import psutil                       # 用来清理上次没退干净、占着档案锁的残留 Chromium
+except Exception:
+    psutil = None
+
+
+def _kill_profile_browsers(prof: Path) -> int:
+    """杀掉仍占用【某账号档案目录】的残留 Chromium（上次崩溃/被任务管理器强杀/断电/软件被强退留下的）。
+    调用点已持有该账号的 asyncio 档案锁 → 此刻还开着这个档案的进程一定是僵尸，杀它安全。
+    只按 --user-data-dir 精确匹配本档案，绝不误伤用户自己的 Chrome/Edge、也不动别的账号。
+    这是「拉列表/发布 偶发卡死打不开档案」的根治：残留进程占着 Chromium 单例档案锁，
+    新进程一开同一档案就被转发给僵尸后自己退出 → CDP 端口永不就绪 → 卡死。"""
+    if psutil is None:
+        return 0
+    target = str(prof).rstrip("\\/").lower()
+    killed = 0
+    for pr in psutil.process_iter(["name", "cmdline"]):
+        try:
+            nm = (pr.info.get("name") or "").lower()
+            if nm not in ("chrome.exe", "chromium.exe", "chrome", "chromium"):
+                continue
+            cl = " ".join(pr.info.get("cmdline") or []).lower()
+            if "--user-data-dir" not in cl or target not in cl:
+                continue
+            if "--type=" in cl:          # 渲染/GPU 子进程：跟着主进程一起死，不单独杀
+                continue
+            for c in pr.children(recursive=True):
+                try: c.kill()
+                except Exception: pass
+            pr.kill()
+            killed += 1
+        except Exception:
+            continue
+    if killed:
+        print(f"[CH] 清理残留档案浏览器 {killed} 个（{prof.name}）", flush=True)
+    return killed
+
 
 # ============ Win32：把后台发布窗口"藏到屏幕右下角只露1px" ============
 # 【2026-07-13 实测根治发布慢】窗口放屏幕外(-32000)会被 Chromium 判定为"不可见"→重度节流
@@ -150,6 +187,7 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
     proc = None
     try:
         prof = _profile_dir(state_file)
+        _kill_profile_browsers(prof)     # 先清掉上次没退干净、占着档案锁的僵尸 Chromium（否则新进程打不开档案→卡死）
         fresh = not (prof / "Default").exists()
         # 【核心·仿小V猫】不用 Playwright 启动浏览器(带自动化特征被视频号风控检测→弹验证)，
         # 而是自己启动一个"干净"的 bundled Chromium(无 --enable-automation、navigator.webdriver=false)，

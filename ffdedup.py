@@ -303,7 +303,7 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         Hm = (int(H * (1 + amp)) // 2) * 2
         vf += (f",scale={Wm}:{Hm},crop={W}:{H}:"
                f"x=(iw-ow)*(0.5+0.5*sin(t*0.10)):y=(ih-oh)*(0.5+0.5*sin(t*0.13))")
-    vf += f",setpts=PTS/{spd},fps=30,format=yuv420p"
+    vf += f",setpts=PTS/{spd},fps=30,setsar=1,format=yuv420p"   # 强制方形像素:防广角/旋转/运镜留下歪SAR导致播放器把画面压成窄条
     fc.append(f"{vsrc}{vf}[m]")
     cur = "[m]"
 
@@ -535,11 +535,13 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
 
     tasks = []          # [(chunk, out, name, safe)]
     per = max(1, int(per))
+    # 成品直接放进 out_dir（上层已是「时间 剧名」文件夹），不再套一层合集子目录 = 只一级。
+    # 多部剧同批时，文件名前面带上剧名以免不同剧的成品重名互相覆盖。
+    multi = len(groups) > 1
+    os.makedirs(out_dir, exist_ok=True)
     for folder, pool in groups.items():
         pool = sorted(pool, key=_natkey)
         safe = re.sub(r'[\\/:*?"<>|]', "", os.path.basename(folder))[:40] or prefix
-        sub = os.path.join(out_dir, safe)
-        os.makedirs(sub, exist_ok=True)
         chunks = [pool[i:i + per] for i in range(0, len(pool), per)]
         if count and count > 0:
             chunks = chunks[:count]
@@ -548,10 +550,13 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
         nv = max(1, int(variants or 1))
         for i, chunk in enumerate(chunks):
             base = _mix_name(chunk, f"{prefix}_{i+1}", i * per + 1, pad)
+            # _mix_name 正常已带「剧名_第XX集」；只有它取不到集号退化成兜底名时，多剧同批才补剧名前缀防重名
+            if multi and not base.startswith(safe):
+                base = f"{safe}_{base}"
             for v in range(nv):
                 # 变体：同一成品渲染N个不同随机参数的版本(多账号各发一个,指纹互不相同)
                 name = base if v == 0 else f"{base}_变体{v+1}"
-                tasks.append((chunk, os.path.join(sub, name + ".mp4"), name, safe, (v, nv)))
+                tasks.append((chunk, os.path.join(out_dir, name + ".mp4"), name, safe, (v, nv)))
 
     total = len(tasks)
     made = []

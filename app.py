@@ -3125,6 +3125,34 @@ async def _fd_bg(body: "FdBody", resume: bool = False):
     FD.update(running=True, status=("续跑上次中断的批次…" if resume else "开始…"), made=[], error="",
               stop=False,   # 每次开始清停止标志
               _id_map={}, _batch=datetime.now().strftime("批次 %m-%d %H:%M:%S"))
+    # 每次导出都新建一个「年月日-时分」子文件夹，绝不追加进上一次的文件夹（多次导出混一起会乱）。
+    # 续跑(resume)时沿用上次已定好的时间戳文件夹，才能跳过已完成的成品、只补没跑完的。
+    if not resume:
+        base_out = (body.out_dir or "").strip() or config.get("jy_output_dir") or str(_dedup_out_dir())
+        stamp = datetime.now().strftime("%Y-%m-%d %H：%M")   # 全角冒号(Windows 文件夹名合法)，形如 2026-07-13 14：05
+        # 时间戳后面带上剧名，一眼看出是哪部剧的成品；多部剧取「第一部等N部」
+        _dramas, _seen = [], set()
+        for _p in (body.clip_paths or []):
+            _nm = os.path.basename(os.path.dirname(_p))
+            if _nm and _nm not in _seen:
+                _seen.add(_nm); _dramas.append(_nm)
+        if len(_dramas) == 1:
+            _label = _dramas[0]
+        elif len(_dramas) > 1:
+            _label = f"{_dramas[0]}等{len(_dramas)}部"
+        else:
+            _label = ""
+        _label = re.sub(r'[\\/:*?"<>|\r\n\t]', "", _label).strip()[:50]
+        folder_name = (f"{stamp} {_label}").strip()
+        run_dir = os.path.join(base_out, folder_name)
+        k = 2
+        while os.path.exists(run_dir):            # 同一分钟内又点一次导出 → 加后缀防撞
+            run_dir = os.path.join(base_out, f"{folder_name}_{k}"); k += 1
+        try:
+            os.makedirs(run_dir, exist_ok=True)
+        except Exception:
+            run_dir = base_out                    # 万一建不了就退回原目录，别让导出失败
+        body.out_dir = run_dir                    # 写进 body：续跑落盘后用同一个时间戳文件夹
     # 把请求落盘：批次没跑完软件就被关/重启时，下次启动自动续跑(已完成的成品跳过)
     try:
         FD_PENDING_FILE.write_text(json.dumps(
@@ -3300,6 +3328,93 @@ def api_ffdedup_videos():
                         "mtime": f.stat().st_mtime})
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return {"videos": out[:800], "root": root}
+
+
+@app.get("/api/ffdedup/materials")
+def api_ffdedup_materials():
+    """去重「素材来源」：只实时扫描下载库（不含成片输出目录），与资源管理器里的下载文件夹一一对应。"""
+    out = []
+    seen = set()
+    plat_names = {"抖音", "TikTok"}
+    root = get_dl()
+    if root.exists():
+        for f in root.rglob("*.mp4"):
+            if not f.is_file() or _is_incomplete(f.name) or str(f) in seen:
+                continue
+            seen.add(str(f))
+            parts = list(f.relative_to(root).parts[:-1])
+            if parts and parts[0] in plat_names:      # 去掉「抖音/TikTok」平台层，露出真实博主/剧名
+                parts = parts[1:]
+            blogger = parts[0] if len(parts) >= 1 else "(未分类)"
+            out.append({"path": str(f), "name": f.name,
+                        "blogger": blogger,
+                        "mix": parts[1] if len(parts) >= 2 else "",
+                        "size": round(f.stat().st_size / 1024 / 1024, 1),
+                        "mtime": f.stat().st_mtime})
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return {"videos": out, "root": str(root)}
+
+
+def _ffd_probe_one(path: str) -> dict:
+    """一次 ffmpeg -i 拿到 时长/分辨率/像素宽高比(SAR)/显示比例(DAR)。"""
+    info = {"path": path, "name": os.path.basename(path),
+            "size": 0.0, "dur": 0.0, "w": 0, "h": 0, "sar": "", "dar": "", "narrow": False}
+    try:
+        info["size"] = round(os.path.getsize(path) / 1024 / 1024, 1)
+    except Exception:
+        pass
+    try:
+        txt = subprocess.run([dedup.FF, "-i", path], capture_output=True,
+                             timeout=25).stderr.decode("utf-8", "ignore")
+        m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", txt)
+        if m:
+            info["dur"] = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+        v = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", txt)
+        if v:
+            info["w"], info["h"] = int(v[1]), int(v[2])
+        s = re.search(r"SAR (\d+):(\d+) DAR (\d+):(\d+)", txt)
+        if s:
+            info["sar"] = f"{s[1]}:{s[2]}"
+            info["dar"] = f"{s[3]}:{s[4]}"
+            info["narrow"] = (int(s[1]) != int(s[2]))   # 像素宽高比≠1:1 → 播放器会压成窄条
+    except Exception:
+        pass
+    return info
+
+
+class ProbePathsBody(BaseModel):
+    paths: list[str] = []
+
+
+@app.post("/api/ffdedup/probe")
+def api_ffdedup_probe(body: ProbePathsBody):
+    """探测一批视频的详细信息（时长/分辨率/宽高比），供「点文件夹看视频」用。"""
+    from concurrent.futures import ThreadPoolExecutor
+    paths = [p for p in (body.paths or []) if p][:80]
+    if not paths:
+        return {"items": []}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        items = list(ex.map(_ffd_probe_one, paths))
+    return {"items": items}
+
+
+class RevealFolderBody(BaseModel):
+    path: str = ""
+
+
+@app.post("/api/ffdedup/reveal_folder")
+def api_ffdedup_reveal_folder(body: RevealFolderBody):
+    """在资源管理器打开某个素材文件夹（限下载库内，防越权）。"""
+    try:
+        rp = Path(body.path or "").resolve()
+        root = get_dl().resolve()
+        if rp == root or root in rp.parents:
+            target = rp if rp.is_dir() else rp.parent
+            os.startfile(str(target))
+            return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"error": "路径不在下载库内"}, status_code=400)
 
 
 @app.post("/api/ffdedup/cfg")

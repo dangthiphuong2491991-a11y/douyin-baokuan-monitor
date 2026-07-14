@@ -713,7 +713,7 @@
 
         <div class="card" style="padding:12px 18px 6px;align-items:flex-start;margin-bottom:14px">
           <div class="setrow" style="padding:12px 0 6px;align-items:flex-start">
-            <div class="l"><div class="t">素材来源</div><div class="d">从下载库勾选合集（可多选），按集数顺序去重 · <span id="fdMatCount" style="color:var(--acc)">未选</span></div></div>
+            <div class="l"><div class="t">素材来源</div><div class="d">实时扫描<b>下载文件夹</b>（和资源管理器一致）· <b>点文件夹看里面的视频信息</b>，点右上角 ✓ 选为去重素材（可多选）· <span id="fdMatCount" style="color:var(--acc)">未选</span></div></div>
             <button class="btn ghost" style="padding:8px 12px" onclick="loadFdMaterials()">🔄 刷新</button>
           </div>
           <div id="fdMatBox" style="margin-bottom:10px"><div class="empty" style="padding:20px">加载中…</div></div>
@@ -740,7 +740,7 @@
             </select>
           </div>
           <div class="setrow" style="padding:10px 0">
-            <div class="l"><div class="t">导出到</div><div class="d">成品 mp4 存这里（留空 = 用剪映成片输出文件夹）</div></div>
+            <div class="l"><div class="t">导出到</div><div class="d">成品 mp4 存这里（留空 = 用剪映成片输出文件夹）· <b>每次导出自动新建「2026-07-13 14：05 剧名」这样的子文件夹</b>，带时间+剧名，不会和上次混在一起</div></div>
             <button class="btn ghost" style="padding:8px 14px" onclick="pickFolderInto('fd_out', saveFdCfg)">📁 选择文件夹</button>
             <span id="fd_out_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:340px">未选择</span>
             <input type="hidden" class="fdC" id="fd_out">
@@ -840,9 +840,9 @@
             <span id="fd_stk_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_stk_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴几张 / 大小 / 不透明度</div></div>
-            <input type="number" class="fdC" id="fd_stk_count" value="2" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
+            <input type="number" class="fdC" id="fd_stk_count" value="4" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
             <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="0.6" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="0.8" style="width:64px" onchange="saveFdCfg()">
-            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.9" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="1.0" style="width:64px" onchange="saveFdCfg()"></div>
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.02" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.03" style="width:64px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
@@ -1821,29 +1821,96 @@ let fdTimer=null, fdMatVideos=[], fdSelFolders=new Set();
 function openFfd(){ loadFfdMaterials().then(loadFdCfg); startFdPoll(); }
 async function loadFfdMaterials(){
   const box=document.getElementById('fdMatBox');
-  try{ const d=await api('/api/channels/videos'); fdMatVideos=d.videos||[]; renderFdMaterials(); }
+  try{ const d=await api('/api/ffdedup/materials'); fdMatVideos=d.videos||[]; window._fdRoot=d.root||''; renderFdMaterials(); }
   catch(e){ box.innerHTML=emptyBox('⚠','读取下载库失败',e.message||''); }
 }
 function loadFdMaterials(){ return loadFfdMaterials(); }
 function renderFdMaterials(){
   const box=document.getElementById('fdMatBox'); const grps=_grpVideos(fdMatVideos);
+  // 剔除已不存在的旧勾选(比如之前误把成片输出目录也算进来的),让计数跟实际对得上
+  if(grps.length){ const keys=new Set(grps.map(g=>g.key)); [...fdSelFolders].forEach(k=>{ if(!keys.has(k)) fdSelFolders.delete(k); }); }
   if(!grps.length){ box.innerHTML=emptyBox('📭','下载库还没有视频','先去下载一些'); updateFdMatCount(); return; }
   box.innerHTML=`<div class="foldgrid">${grps.map(g=>{
-    const sel=fdSelFolders.has(g.key); const totMB=g.videos.reduce((s,v)=>s+(v.size||0),0);
-    return `<div class="foldtile ${sel?'sel':''}" onclick='fdToggleFolder(${JSON.stringify(g.key)})' title="${esc(g.key)}">
-      ${FOLDER_SVG}<span class="foldcheck">✓</span><div class="foldname">${esc(g.key)}</div>
+    const sel=fdSelFolders.has(g.key); const totMB=g.videos.reduce((s,v)=>s+(v.size||0),0); const kj=JSON.stringify(g.key);
+    return `<div class="foldtile ${sel?'sel':''}" onclick='fdOpenFolder(${kj})' title="点击查看里面的视频 · 右上角✓选为去重素材">
+      ${FOLDER_SVG}<span class="foldcheck" onclick='event.stopPropagation();fdToggleFolder(${kj})' title="${sel?'已选为素材,点击取消':'选为去重素材'}">✓</span><div class="foldname">${esc(g.key)}</div>
       <div class="foldsub">${g.videos.length} 集 · ${_sizeStr(totMB)}</div>
       <div class="foldsub" style="color:var(--dim);font-size:11px">📅 ${_grpDate(g)||'—'}</div></div>`; }).join('')}</div>`;
   updateFdMatCount();
 }
-function fdToggleFolder(k){ fdSelFolders.has(k)?fdSelFolders.delete(k):fdSelFolders.add(k); renderFdMaterials(); saveFdCfg(); }
+function fdToggleFolder(k){ fdSelFolders.has(k)?fdSelFolders.delete(k):fdSelFolders.add(k); renderFdMaterials(); saveFdCfg(); _fdSyncModalSel(k); }
 function fdSelectedClipPaths(){ return fdMatVideos.filter(v=>fdSelFolders.has(_folderKey(v))).map(v=>v.path); }
+/* ---- 点文件夹：钻进去看里面每条视频的具体信息(时长/分辨率/画面是否正常) ---- */
+function _fdFmtDur(s){ s=Math.round(s||0); if(!s) return '—'; const m=Math.floor(s/60), ss=s%60; return m+':'+('0'+ss).slice(-2); }
+let _fdModalKey='';
+async function fdOpenFolder(key){
+  _fdModalKey=key;
+  const vids=_folderVideos(fdMatVideos,key).slice().sort((a,b)=>(a.name>b.name?1:(a.name<b.name?-1:0)));
+  let ov=document.getElementById('fdFolderOv');
+  if(!ov){ ov=document.createElement('div'); ov.id='fdFolderOv'; ov.className='overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:990;display:grid;place-items:center';
+    ov.onclick=e=>{ if(e.target===ov){ ov.remove(); _fdModalKey=''; } }; document.body.appendChild(ov); }
+  const sel=fdSelFolders.has(key), totMB=vids.reduce((s,v)=>s+(v.size||0),0), kj=JSON.stringify(key);
+  ov.innerHTML=`<div style="background:var(--card);border-radius:14px;width:min(760px,94vw);max-height:84vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <b style="font-size:15px">📁 ${esc(key)}</b>
+      <span style="color:var(--sub);font-size:12px">${vids.length} 个视频 · ${_sizeStr(totMB)}</span>
+      <button id="fdModalSel" class="btn${sel?' ghost':''}" style="padding:5px 12px;font-size:13px;margin-left:auto" onclick='fdToggleFolder(${kj})'>${sel?'✓ 已选为素材（点取消）':'＋ 选为去重素材'}</button>
+      <button class="btn ghost" style="padding:5px 12px;font-size:13px" onclick='fdRevealFolder(${kj})'>📂 打开文件夹</button>
+      <span style="cursor:pointer;font-size:18px;padding:0 4px" onclick="document.getElementById('fdFolderOv').remove()">✕</span>
+    </div>
+    <div style="padding:6px 14px 14px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <tr style="color:var(--sub);text-align:left"><th style="padding:6px 4px">文件名</th><th style="width:64px">时长</th><th style="width:96px">分辨率</th><th style="width:90px">画面</th><th style="width:72px">大小</th></tr>
+        ${vids.map((v,i)=>`<tr id="fdrow_${i}" style="border-top:1px solid var(--line)">
+          <td style="padding:7px 4px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(v.name)}">${esc(v.name)}</td>
+          <td class="fdc_dur" style="color:var(--sub)">…</td>
+          <td class="fdc_res" style="color:var(--sub)">…</td>
+          <td class="fdc_ar" style="color:var(--dim)">…</td>
+          <td style="color:var(--sub)">${_sizeStr(v.size||0)}</td>
+        </tr>`).join('')}
+      </table></div></div>`;
+  try{
+    const d=await api('/api/ffdedup/probe','POST',{paths:vids.map(v=>v.path)});
+    if(_fdModalKey!==key) return;   // 用户已经切走
+    const items=d.items||[];
+    vids.forEach((v,i)=>{
+      const info=items.find(x=>x.path===v.path)||{}, row=document.getElementById('fdrow_'+i); if(!row) return;
+      row.querySelector('.fdc_dur').textContent=_fdFmtDur(info.dur);
+      row.querySelector('.fdc_res').textContent=(info.w&&info.h)?`${info.w}×${info.h}`:'—';
+      const ar=row.querySelector('.fdc_ar');
+      if(info.narrow){ ar.textContent='⚠ 窄条'; ar.style.color='var(--red)'; ar.title='像素宽高比 '+(info.sar||'')+'，播放会被压窄'; }
+      else if(info.w&&info.h){ ar.textContent='✓ 正常'; ar.style.color='var(--ok,#3ca66a)'; }
+      else ar.textContent='—';
+    });
+  }catch(e){}
+}
+function _fdSyncModalSel(key){
+  if(_fdModalKey!==key) return;
+  const b=document.getElementById('fdModalSel'); if(!b) return;
+  const sel=fdSelFolders.has(key);
+  b.textContent=sel?'✓ 已选为素材（点取消）':'＋ 选为去重素材';
+  b.className='btn'+(sel?' ghost':'');
+}
+async function fdRevealFolder(key){
+  const v=_folderVideos(fdMatVideos,key)[0]; if(!v){ uiAlert('这个文件夹是空的'); return; }
+  try{ await api('/api/ffdedup/reveal_folder','POST',{path:v.path}); }catch(e){ uiAlert(e.message); }
+}
 function updateFdMatCount(){
   const el=document.getElementById('fdMatCount'); if(!el) return;
-  const c=fdSelectedClipPaths().length, per=parseInt(document.getElementById('fd_per').value)||3;
+  const per=parseInt(document.getElementById('fd_per').value)||3;
+  const variants=Math.max(1,parseInt((document.getElementById('fd_variants')||{}).value)||1);
+  // 【关键】按剧(每个选中的文件夹)分别切块，绝不把两个剧合起来切
+  const groups=_grpVideos(fdMatVideos).filter(g=>fdSelFolders.has(g.key));
+  const c=groups.reduce((s,g)=>s+g.videos.length,0);
   el.textContent=fdSelFolders.size?`已选 ${fdSelFolders.size} 个文件夹 · 共 ${c} 集`:'未选';
   const h=document.getElementById('fdChunkHint');
-  if(h){ const n=Math.ceil(c/per), rem=c%per; h.textContent=c?`${n} 个成品${rem?`（最后一个 ${rem} 集）`:''}`:''; }
+  if(h){
+    let chunks=0, tails=0;
+    groups.forEach(g=>{ const n=Math.ceil(g.videos.length/per); chunks+=n; if(g.videos.length%per) tails++; });
+    const outs=chunks*variants;
+    h.textContent=c?`${outs} 个成品（按剧各切各的，不跨剧合并${variants>1?` · ×${variants}变体`:''}${tails?` · ${tails} 个剧末尾不足 ${per} 集`:''}）`:'';
+  }
 }
 const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band_h_lo','fd_band_h_hi','fd_band_op_lo','fd_band_op_hi','fd_bT_enable','fd_bT_folder','fd_bB_enable','fd_bB_folder',
   'fd_spd_lo','fd_spd_hi','fd_bri_lo','fd_bri_hi','fd_con_lo','fd_con_hi','fd_sat_lo','fd_sat_hi','fd_shp_lo','fd_shp_hi','fd_hue_lo','fd_hue_hi','fd_gam_lo','fd_gam_hi',
@@ -1885,8 +1952,8 @@ function buildFdCfg(){
     audio:{ pitch:[n('fd_pit_lo',0.97),n('fd_pit_hi',1.03)], volume:[n('fd_avol_lo',0.95),n('fd_avol_hi',1.05)], eq:on('fd_aeq') },
     fake_meta:on('fd_fakemeta'),
     mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
-    stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',2),
-      scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.9),n('fd_stk_al_hi',1.0)] },
+    stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',4),
+      scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
     bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] } };
 }
 async function runFd(btn){
