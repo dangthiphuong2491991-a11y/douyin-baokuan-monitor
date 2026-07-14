@@ -3120,7 +3120,7 @@ async function chOpenBackend(id,btn){
   const acc=chAccounts.find(a=>a.id===id);
   if(window.electronAPI&&window.electronAPI.isElectron){
     if(btn){ btn.disabled=true; const o=btn.innerHTML; btn.textContent='打开中…'; setTimeout(()=>{btn.disabled=false;btn.innerHTML=o;},1200); }
-    try{ await openAcctBackend(id, acc?acc.name:id); }catch(e){ uiAlert(e.message||'打开失败'); }
+    try{ await openAcctBackend(id, acc?acc.name:id); if(acc&&!acc.online) toast('右边扫码登录即可，扫完自动同步'); }catch(e){ uiAlert(e.message||'打开失败'); }
     return;
   }
   // 非 Electron（pywebview）：退回独立浏览器窗口
@@ -3147,9 +3147,32 @@ async function openAcctBackend(aid, name){
     // 改成 block/none 内部会退回约150px）。切换标签用 visibility+z-index，不动 display。
     wv.style.cssText='position:absolute;top:0;right:0;bottom:0;left:0;border:0;visibility:hidden;z-index:1';
     wv.addEventListener('dom-ready', ()=>zoomFitBackend(wv));
+    // 扫码登录进后台后(URL 变成 /platform 不是 login)→自动同步登录态给发布/剧集用，不用手点「同步」
+    wv.addEventListener('did-navigate', e=>_onBackendNav(aid, e&&e.url));
+    wv.addEventListener('did-navigate-in-page', e=>_onBackendNav(aid, e&&e.url));
     document.getElementById('chAcctBackendBody').appendChild(wv);
   }
   showBackendTab(aid);
+}
+let _bkSynced={};
+function _onBackendNav(aid, url){
+  url=url||'';
+  if(url.indexOf('channels.weixin.qq.com/platform')>=0 && url.indexOf('login')<0 && !_bkSynced[aid]){
+    _bkSynced[aid]=true;                     // 一个会话只自动同步一次
+    setTimeout(()=>_autoSyncBackend(aid), 2500);   // 等 cookie/localStorage 就绪
+  }
+}
+async function _autoSyncBackend(aid){
+  const w=document.getElementById('wv_'+aid); if(!w) return;
+  try{
+    let cookies=[];
+    if(window.electronAPI&&electronAPI.getPartitionCookies){ const r=await electronAPI.getPartitionCookies(aid); cookies=(r&&r.cookies)||[]; }
+    if(!cookies.some(c=>c.name==='sessionid')){ _bkSynced[aid]=false; return; }   // 还没真登录，允许下次再试
+    let ls=[]; try{ ls=await w.executeJavaScript('(function(){try{return Object.entries(localStorage);}catch(e){return[];}})()'); }catch(e){}
+    await api('/api/channels/account/'+aid+'/save_state','POST',{cookies, localStorage:ls});
+    toast('✅ 已自动登录并同步，这个号可以用了');
+    refreshChannels();
+  }catch(e){ _bkSynced[aid]=false; }
 }
 function zoomFitBackend(wv){
   const body=document.getElementById('chAcctBackendBody'); if(!body||!wv) return;
@@ -3173,6 +3196,7 @@ async function clearBackendLogin(){
   const aid=backendActive; if(!aid) return;
   if(!await uiConfirm('清空这个号的后台登录会话，重新扫码？（用于登录失败/脏会话）','清空重登')) return;
   try{ if(window.electronAPI&&electronAPI.clearPartition) await electronAPI.clearPartition(aid); }catch(e){}
+  _bkSynced[aid]=false;                        // 清空重登→重新允许扫码后自动同步
   const w=document.getElementById('wv_'+aid);
   if(w){ try{ w.reloadIgnoringCache?w.reloadIgnoringCache():w.reload(); }catch(e){ try{ w.src='https://channels.weixin.qq.com/'; }catch(_){} } }
   toast('已清空会话，稍等出二维码，扫码登录进后台后点「同步登录到发布」');
@@ -3213,6 +3237,7 @@ function renderBackendTabs(){
 }
 function closeBackendTab(aid){
   backendTabs=backendTabs.filter(t=>t.aid!==aid);
+  _bkSynced[aid]=false;                       // 关标签→下次开重新允许自动同步
   const w=document.getElementById('wv_'+aid); if(w) w.remove();
   if(backendActive===aid){
     if(backendTabs.length) showBackendTab(backendTabs[backendTabs.length-1].aid);
@@ -3231,7 +3256,7 @@ function renderAccounts(accs){
   document.getElementById('chAccList').innerHTML=chAccounts.length? (show.length? show.map(a=>{
     const active=backendActive===a.id;
     return `
-    <div data-aid="${a.id}" onclick="${a.online?`chOpenBackend('${a.id}')`:`chRelogin('${a.id}')`}"
+    <div data-aid="${a.id}" onclick="chOpenBackend('${a.id}')"
          style="padding:9px 10px;display:flex;gap:10px;align-items:center;cursor:pointer;border-radius:10px;border:1px solid ${active?'var(--acc)':'var(--line)'};background:${active?'rgba(124,110,255,.10)':'var(--card)'}">
       <div style="position:relative;flex-shrink:0;width:40px;height:40px">
         <img src="/api/channels/account/${a.id}/avatar?v=${a.avatar?1:0}" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"
