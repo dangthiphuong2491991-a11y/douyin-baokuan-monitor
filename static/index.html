@@ -3181,8 +3181,8 @@ async function openAcctBackend(aid, name){
     // 四边全 0 撑满父容器；【关键】绝不设 display（Electron webview 靠默认 display:flex 撑满内容，
     // 改成 block/none 内部会退回约150px）。切换标签用 visibility+z-index，不动 display。
     wv.style.cssText='position:absolute;top:0;right:0;bottom:0;left:0;border:0;visibility:hidden;z-index:1';
-    wv.addEventListener('dom-ready', ()=>zoomFitBackend(wv));
     // 扫码登录进后台后(URL 变成 /platform 不是 login)→自动同步登录态给发布/剧集用，不用手点「同步」
+    wv.addEventListener('dom-ready', ()=>{ zoomFitBackend(wv); try{ _onBackendNav(aid,(typeof wv.getURL==='function')?wv.getURL():''); }catch(e){} });
     wv.addEventListener('did-navigate', e=>_onBackendNav(aid, e&&e.url));
     wv.addEventListener('did-navigate-in-page', e=>_onBackendNav(aid, e&&e.url));
     document.getElementById('chAcctBackendBody').appendChild(wv);

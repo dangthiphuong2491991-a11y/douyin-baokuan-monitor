@@ -1924,7 +1924,8 @@ def api_ch_save_state(aid: str, body: SaveStateBody):
         {"origin": "https://channels.weixin.qq.com", "localStorage": ls}]}
     _ch_state(aid).parent.mkdir(parents=True, exist_ok=True)
     _ch_state(aid).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    return {"ok": True, "cookies": len(cks), "localStorage": len(ls)}
+    _mark_session(aid, True)     # 从已登录的 webview 同步到 sessionid = 登录有效 → 标在线(不用再开浏览器校验)
+    return {"ok": True, "cookies": len(cks), "localStorage": len(ls), "online": True}
 
 
 CH_LISTS = {"running": False, "data": {}, "for": ""}
