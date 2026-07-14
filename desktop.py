@@ -28,16 +28,27 @@ _NO_WINDOW = 0x08000000
 
 
 def _cleanup_leftovers():
-    """启动时清理自动更新残留：*_old.exe / *_new.exe / *.part"""
+    """启动时清理自动更新残留：*_old.exe / *_new.exe / *.part。
+    【根治「更新后目录里留着两个 exe」】刚更新完时，旧进程还没退干净、_old.exe 还被锁着，
+    立刻删会失败。这里改成后台线程反复重试删 ~40 秒——等旧进程一退出、锁一释放就删掉。"""
     if not getattr(sys, "frozen", False):
         return
     folder = os.path.dirname(sys.executable)
-    for pat in ("*_old.exe", "*_new.exe", "*.part"):
-        for f in glob.glob(os.path.join(folder, pat)):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
+
+    def _sweep():
+        for _ in range(20):                      # 最多重试 ~40 秒
+            leftover = False
+            for pat in ("*_old.exe", "*_new.exe", "*.part"):
+                for f in glob.glob(os.path.join(folder, pat)):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        leftover = True          # 还被锁 → 待会再试
+            if not leftover:
+                return
+            time.sleep(2)
+
+    threading.Thread(target=_sweep, daemon=True).start()
 
 
 def _ensure_desktop_shortcut():

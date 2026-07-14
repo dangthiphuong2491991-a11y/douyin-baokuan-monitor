@@ -4049,29 +4049,53 @@ async function checkUpdate(manual){
     }
   }catch(e){ if(manual) uiAlert('检查更新失败：'+e.message); }
 }
+let _updPollTimer=null;
 async function doUpdate(d){
-  showUpdateMask('正在下载新版本 v'+d.latest+' …\n下载完成后会自动覆盖并重启，请勿关闭软件');
+  showUpdateMask('准备下载新版本 v'+(d.latest||'')+' …', true);
   try{
     const r=await api('/api/do_update','POST');
-    if(r&&r.ok){ showUpdateMask('下载完成，正在覆盖并重启软件…\n本窗口会自动关闭'); }
-    else{ hideUpdateMask(); uiAlert((r&&r.error)||'更新失败'); }
-  }catch(e){
-    // 更新成功后后端会退出，导致请求中断 → 视为正在重启
-    showUpdateMask('正在覆盖并重启软件…\n本窗口会自动关闭');
-  }
+    if(r&&r.error){ hideUpdateMask(); uiAlert(r.error); return; }
+  }catch(e){ /* 后端可能已在下载，交给轮询判断 */ }
+  _pollUpdate();
 }
-function showUpdateMask(text){
+function _pollUpdate(){
+  clearInterval(_updPollTimer);
+  const mb=n=>(Math.max(0,n)/1048576).toFixed(0);
+  _updPollTimer=setInterval(async()=>{
+    let s;
+    try{ s=await api('/api/update_progress'); }
+    catch(e){ clearInterval(_updPollTimer); showUpdateMask('新版就位，正在重启软件…\n本窗口会自动关闭'); return; }  // 后端退出=在重启
+    if(s.error){ clearInterval(_updPollTimer); hideUpdateMask(); uiAlert('更新失败：'+s.error); return; }
+    if(s.stage==='downloading'){
+      const pct=s.total?Math.min(100,Math.floor(s.downloaded/s.total*100)):0;
+      setUpdateBar(pct, `正在下载新版 v${s.version||''}\n${mb(s.downloaded)} / ${s.total?mb(s.total):'?'} MB · ${pct}%`);
+    }else if(s.stage==='installing'){ setUpdateBar(100,'下载完成，正在安装…\n请勿关闭软件'); }
+    else if(s.stage==='restarting'||s.done){ clearInterval(_updPollTimer); showUpdateMask('新版就位，正在重启软件…\n本窗口会自动关闭'); }
+    else if(s.stage==='preparing'){ setUpdateBar(0,'连接更新源…'); }
+  }, 500);
+}
+function showUpdateMask(text, withBar){
   let m=document.getElementById('updMask');
   if(!m){
     m=document.createElement('div'); m.id='updMask';
-    m.style.cssText='position:fixed;inset:0;background:rgba(10,12,18,.93);backdrop-filter:blur(5px);z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:#fff;text-align:center;white-space:pre-line;font-size:15px;line-height:1.9';
-    m.innerHTML='<div style="width:46px;height:46px;border:4px solid #6c5ce7;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div><div id="updMaskText"></div>';
+    m.style.cssText='position:fixed;inset:0;background:rgba(10,12,18,.93);backdrop-filter:blur(5px);z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;color:#fff;text-align:center;white-space:pre-line;font-size:15px;line-height:1.9';
+    m.innerHTML='<div id="updSpin" style="width:46px;height:46px;border:4px solid #6c5ce7;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>'
+      +'<div id="updMaskText"></div>'
+      +'<div id="updBarWrap" style="display:none;width:min(460px,72vw)"><div style="height:12px;border-radius:8px;background:rgba(255,255,255,.14);overflow:hidden">'
+      +'<div id="updBar" style="height:100%;width:0%;border-radius:8px;background:linear-gradient(90deg,#7c6eff,#a78bfa);transition:width .3s"></div></div></div>';
     document.body.appendChild(m);
     const s=document.createElement('style'); s.textContent='@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s);
   }
-  m.style.display='flex'; document.getElementById('updMaskText').textContent=text;
+  m.style.display='flex';
+  document.getElementById('updMaskText').textContent=text;
+  document.getElementById('updBarWrap').style.display=withBar?'block':'none';
+  const sp=document.getElementById('updSpin'); if(sp) sp.style.display=withBar?'none':'block';
 }
-function hideUpdateMask(){ const m=document.getElementById('updMask'); if(m) m.style.display='none'; }
+function setUpdateBar(pct, text){
+  showUpdateMask(text, true);
+  const b=document.getElementById('updBar'); if(b) b.style.width=Math.max(0,Math.min(100,pct))+'%';
+}
+function hideUpdateMask(){ const m=document.getElementById('updMask'); if(m) m.style.display='none'; if(_updPollTimer) clearInterval(_updPollTimer); }
 
 /* ---- 登录（按当前平台）---- */
 async function loginQR(btn){

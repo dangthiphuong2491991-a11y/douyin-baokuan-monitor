@@ -34,17 +34,57 @@ async def resolve_aweme_id(text: str, platform: str = "douyin"):
     return await get_adapter(platform).resolve_aweme_id(text)
 
 # 打包后(PyInstaller)与源码运行的路径不同：
-#   静态资源(static)在包内(_MEIPASS)；data/downloads 要放在 exe 旁边(持久、可写)
+#   静态资源(static)在包内(_MEIPASS，只读)。
+#   数据(data/downloads)【固定放 %LOCALAPPDATA%\爆款监控\】——不再放 exe 旁边。
+#   这样以后换外壳(pywebview→Electron)、exe 换位置/自动更新，数据都在同一处、绝不丢
+#   (尤其视频号登录 cookie 和账号档案)。老版本(数据在 exe 旁边)首次跑新版会自动迁移过来。
 if getattr(sys, "frozen", False):
-    BASE = Path(sys._MEIPASS)                 # 只读资源
-    APP_DIR = Path(sys.executable).parent     # 可写数据
+    BASE = Path(sys._MEIPASS)                 # 只读资源(static/version.json)
+    _local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    APP_DIR = Path(_local) / "爆款监控"
 else:
     BASE = Path(__file__).parent
     APP_DIR = BASE
+
+
+def _migrate_data_dir():
+    """老版本把 data/downloads 存在 exe 旁边；新版改存 %LOCALAPPDATA%\\爆款监控。
+    首次跑新版时把老位置的 data 原样搬过来(尤其视频号登录/账号档案)，绝不让用户重扫码。
+    只在【新位置还没数据、老位置有数据】时迁一次；迁完不删老的(留底防意外)。"""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import shutil
+        old_dir = Path(sys.executable).parent
+        if old_dir.resolve() == APP_DIR.resolve():
+            return
+        old_data, new_data = old_dir / "data", APP_DIR / "data"
+        if (new_data / "config.json").exists():        # 新位置已在用 → 不动
+            return
+        if not (old_data / "config.json").exists():     # 老位置也没数据 → 全新安装，不用迁
+            return
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        # 逐文件复制 data/(个别文件被锁住也不影响整体；关键的 config/channels 一定过去)
+        for root, _dirs, files in os.walk(old_data):
+            rel = Path(root).relative_to(old_data)
+            (new_data / rel).mkdir(parents=True, exist_ok=True)
+            for f in files:
+                dst = new_data / rel / f
+                if dst.exists():
+                    continue
+                try:
+                    shutil.copy2(Path(root) / f, dst)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+_migrate_data_dir()
 DATA = APP_DIR / "data"
 DL = APP_DIR / "downloads"
-DATA.mkdir(exist_ok=True)
-DL.mkdir(exist_ok=True)
+DATA.mkdir(parents=True, exist_ok=True)
+DL.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA / "config.json"
 STATE_FILE = DATA / "state.json"
 PORT = 8790
@@ -86,6 +126,16 @@ def _save(path: Path, obj):
 
 
 config = _load(CONFIG_FILE, {"interval_minutes": 5, "bloggers": []})
+# 迁移善后：老用户若用的是【默认下载目录(exe 旁边的 downloads)】，迁数据后把 download_dir
+# 接到老位置，避免"下载库突然空了"（大文件不搬、只把路径接过去；只做一次）。
+if getattr(sys, "frozen", False) and not (config.get("download_dir") or "").strip():
+    _old_dl = Path(sys.executable).parent / "downloads"
+    try:
+        if _old_dl.exists() and _old_dl.resolve() != DL.resolve() and any(_old_dl.iterdir()):
+            config["download_dir"] = str(_old_dl)
+            _save(CONFIG_FILE, config)
+    except Exception:
+        pass
 state = _load(STATE_FILE, {"seen": {}, "updates": [], "last_check": None, "errors": []})
 POSTS_CACHE = {}  # sec_uid -> {aweme_id: 完整 aweme dict}，供手动下载取新鲜地址
 
@@ -3642,43 +3692,79 @@ def _ulog(msg: str):
         pass
 
 
+# 自动更新的实时进度（前端轮询 /api/update_progress 画进度条）
+UPDATE_STATE = {"running": False, "stage": "", "downloaded": 0, "total": 0,
+                "error": "", "done": False, "version": ""}
+
+
+def _upd_fail(msg: str):
+    _ulog(f"更新失败：{msg}")
+    UPDATE_STATE.update(running=False, error=str(msg)[:200], stage="error")
+
+
+@app.get("/api/update_progress")
+def api_update_progress():
+    """前端轮询它画下载进度条。"""
+    return UPDATE_STATE
+
+
 @app.post("/api/do_update")
 async def api_do_update():
-    """自动更新：下载新版 exe → 重命名运行中的自己 → 新版就位 → 重启。全程写 update.log。"""
-    _ulog("==== do_update 开始 ====")
+    """启动自动更新（后台跑，立即返回）。前端用 /api/update_progress 轮询进度。"""
+    if UPDATE_STATE["running"]:
+        return {"ok": True, "already": True}
     if not getattr(sys, "frozen", False):
         return JSONResponse({"error": "源码运行不支持自动覆盖更新（开发时请用 git pull）"}, status_code=400)
     if not UPDATE_RAW_URL:
         return JSONResponse({"error": "未配置更新源"}, status_code=400)
+    UPDATE_STATE.update(running=True, stage="preparing", downloaded=0, total=0,
+                        error="", done=False, version="")
+    asyncio.create_task(_do_update_bg())
+    return {"ok": True, "started": True}
+
+
+async def _do_update_bg():
+    """自动更新：下载新版 exe(带进度) → 重命名运行中的自己 → 新版就位 → 重启。全程写 update.log。"""
+    _ulog("==== do_update 开始 ====")
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             info = (await c.get(UPDATE_RAW_URL)).json()
         exe_url = info.get("exe_url")
+        UPDATE_STATE["version"] = str(info.get("version", ""))
         _ulog(f"目标版本 {info.get('version')}  exe_url={exe_url}")
         if not exe_url:
-            return JSONResponse({"error": "更新信息里没有 exe 下载地址"}, status_code=400)
+            _upd_fail("更新信息里没有 exe 下载地址")
+            return
 
         cur = Path(sys.executable)
         newf = cur.with_name(cur.stem + "_new.exe")
         _ulog(f"当前 exe = {cur}")
-        # 下载新 exe
+        # 下载新 exe（逐块累加进度，供前端进度条）
         _ulog("开始下载…")
+        UPDATE_STATE["stage"] = "downloading"
         async with httpx.AsyncClient(timeout=None, follow_redirects=True) as c:
             async with c.stream("GET", exe_url) as r:
                 if r.status_code != 200:
                     _ulog(f"下载失败 HTTP {r.status_code}")
-                    return JSONResponse({"error": f"下载新版失败 HTTP {r.status_code}"}, status_code=400)
+                    _upd_fail(f"下载新版失败 HTTP {r.status_code}（更新源在你网络下可能不通/太慢）")
+                    return
+                UPDATE_STATE["total"] = int(r.headers.get("content-length") or 0)
                 tmp = newf.with_suffix(".part")
+                got = 0
                 with open(tmp, "wb") as f:
                     async for chunk in r.aiter_bytes(1 << 16):
                         f.write(chunk)
+                        got += len(chunk)
+                        UPDATE_STATE["downloaded"] = got
                 tmp.replace(newf)
         size = newf.stat().st_size
         _ulog(f"下载完成，大小 {size} 字节")
         if size < 1_000_000:
             newf.unlink(missing_ok=True)
-            return JSONResponse({"error": "下载的文件异常（过小），可能网络中断了"}, status_code=400)
+            _upd_fail("下载的文件异常（过小），可能网络中断了")
+            return
 
+        UPDATE_STATE["stage"] = "installing"
         # 等新 exe 可读（杀毒扫描完、释放锁）
         readable = False
         for i in range(60):
@@ -3695,9 +3781,8 @@ async def api_do_update():
         if not readable:
             _ulog("新 exe 60 秒内一直不可读 → 判定被锁")
             os.startfile(str(cur.parent))
-            return JSONResponse(
-                {"error": f"新版已下载好，但一直读不了（可能被杀毒锁住）。\n请手动：关闭软件 → 把「{newf.name}」改名成「{cur.name}」。\n（已打开文件夹）"},
-                status_code=400)
+            _upd_fail(f"新版已下载好，但一直读不了（可能被杀毒锁住）。请手动：关闭软件 → 把「{newf.name}」改名成「{cur.name}」。（已打开文件夹）")
+            return
 
         # 重命名运行中的自己 → _old.exe，再把新版就位
         oldf = cur.with_name(cur.stem + "_old.exe")
@@ -3712,9 +3797,8 @@ async def api_do_update():
         except Exception as e:
             _ulog(f"步骤1 失败：重命名当前 exe 出错：{e}")
             os.startfile(str(cur.parent))
-            return JSONResponse(
-                {"error": f"重命名当前程序失败（{e}）。新版已下载，请手动替换。（已打开文件夹）"},
-                status_code=400)
+            _upd_fail(f"重命名当前程序失败（{e}）。新版已下载，请手动替换。（已打开文件夹）")
+            return
         try:
             os.replace(str(newf), str(cur))
             _ulog("步骤2 OK：新版已就位为正式 exe")
@@ -3725,12 +3809,13 @@ async def api_do_update():
             except Exception:
                 pass
             os.startfile(str(cur.parent))
-            return JSONResponse(
-                {"error": f"新版就位失败（{e}）。已回滚，请手动替换。（已打开文件夹）"},
-                status_code=400)
+            _upd_fail(f"新版就位失败（{e}）。已回滚，请手动替换。（已打开文件夹）")
+            return
 
+        UPDATE_STATE.update(stage="restarting", done=True)
         # 直接启动新 exe（不经 PowerShell 中转——从冻结 exe spawn PowerShell 不可靠）。
-        # 新 exe 启动时会等旧进程退出、端口释放（见 desktop.py 的 _wait_port_free）。
+        # 新 exe 启动时会等旧进程退出、端口释放（见 desktop.py 的 _wait_port_free），
+        # 并后台重试清掉这个 _old.exe（见 desktop.py 的 _cleanup_leftovers）。
         DETACHED = 0x00000008
         NEW_GROUP = 0x00000200
         try:
@@ -3741,10 +3826,8 @@ async def api_do_update():
             _ulog(f"启动新 exe 失败：{e}")
         _ulog("==== do_update 成功收尾，1.5 秒后退出本进程 ====")
         threading.Timer(1.5, lambda: os._exit(0)).start()
-        return {"ok": True, "version": info.get("version")}
     except Exception as e:
-        _ulog(f"do_update 异常：{e}")
-        return JSONResponse({"error": f"更新失败: {e}"}, status_code=400)
+        _upd_fail(f"更新失败: {e}")
 
 
 @app.post("/api/test_notify")
