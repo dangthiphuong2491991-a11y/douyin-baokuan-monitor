@@ -64,6 +64,8 @@ function startPublishServer() {
       res.writeHead(404); res.end();
     }
   });
+  // 端口被占（比如已有一个实例在跑）不要让主进程崩——优雅忽略即可
+  srv.on('error', (e) => console.log('[pub] 发布服务端口占用/出错(已忽略，不崩溃):', String(e).slice(0, 100)));
   srv.listen(PUB_PORT, '127.0.0.1', () => console.log('[pub] 原生发布服务 :' + PUB_PORT));
 }
 
@@ -362,8 +364,18 @@ function downloadAndRunInstaller(url, ver) {
   });
 }
 
-app.whenReady().then(() => { startBackend(); startPublishServer(); });
-app.on('window-all-closed', () => {
-  if (backend) { try { backend.kill(); } catch (e) {} }
+// 【单实例保护】已经有一个在跑就别再开第二个——否则第二个抢 8790/8791 端口会崩
+// (EADDRINUSE)。第二次点图标 → 直接把已开的窗口拉到前面，不再启动新进程。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
   app.quit();
-});
+} else {
+  app.on('second-instance', () => {
+    if (win) { try { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } catch (e) {} }
+  });
+  app.whenReady().then(() => { startBackend(); startPublishServer(); });
+  app.on('window-all-closed', () => {
+    if (backend) { try { backend.kill(); } catch (e) {} }
+    app.quit();
+  });
+}
