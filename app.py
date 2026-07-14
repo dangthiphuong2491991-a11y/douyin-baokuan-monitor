@@ -3266,9 +3266,13 @@ async def api_ffdedup_render(body: FdBody):
         bb = b.get(key) or {}
         if bb.get("enable") and not (bb.get("folder") or "").strip():
             return JSONResponse({"error": f"{cn}方蒙版已启用，请先选它的素材文件夹"}, status_code=400)
+    # BGM / 片尾 默认是开的：启用了但没选文件夹 → 当没开(自动跳过)，不拦着不让导出。
     bg = body.cfg.get("bgm") or {}
     if bg.get("enable") and not (bg.get("folder") or "").strip():
-        return JSONResponse({"error": "背景音乐已启用，请先选音乐文件夹"}, status_code=400)
+        bg["enable"] = False
+    tvc = body.cfg.get("tailvid") or {}
+    if tvc.get("enable") and not (tvc.get("folder") or "").strip():
+        tvc["enable"] = False
     asyncio.create_task(_fd_bg(body))
     return {"ok": True}
 

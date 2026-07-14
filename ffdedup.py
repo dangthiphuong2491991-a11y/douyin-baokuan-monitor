@@ -495,6 +495,59 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         except OSError:
             pass
         raise RuntimeError("ffmpeg失败：" + r.stderr.decode("utf-8", "ignore")[-300:])
+
+    # ---- 片尾视频：成品渲染成功后，用第二遍把随机片尾(缩放到 9:16)接到最后 ----
+    # 对已渲染好的干净成品做——它的音频是规规矩矩的 aac 立体声，没有主链 asetrate 留下的
+    # "未知声道布局"，concat 才稳。失败也不影响已出的无片尾成品。
+    tailcfg = cfg.get("tailvid") or {}
+    tail_vids = scan(tailcfg.get("folder"), _VEXT)
+    if tailcfg.get("enable") and tail_vids:
+        tv = random.choice(tail_vids)
+        tail_out = part[:-4] + ".tail.mp4"
+        main_has_a = _probe_has_audio(part)
+        tail_has_a = _probe_has_audio(tv)
+
+        def _tail_cmd(silent_tail):
+            # 片尾输入加容错：抖音等来源偶有损坏音频包，丢弃坏包+忽略错误
+            tin = ["-i", part, "-err_detect", "ignore_err", "-fflags", "+discardcorrupt", "-i", tv]
+            tfc = [f"[1:v:0]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,setsar=1,format=yuv420p[tv]",
+                   f"[0:v:0]fps=30,setsar=1,format=yuv420p[mv]"]
+            if main_has_a:
+                tfc.append("[0:a:0]aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[ma]")
+                if tail_has_a and not silent_tail:
+                    tfc.append("[1:a:0]aresample=44100,aformat=sample_fmts=fltp,pan=stereo|c0=c0|c1=c1[ta]")
+                else:                          # 片尾没音轨/音频损坏→补等长静音，保证片尾画面照样接上
+                    _td = _probe_dur(tv) or 3.0
+                    tin += ["-f", "lavfi", "-t", f"{_td:.2f}", "-i", "anullsrc=r=44100:cl=stereo"]
+                    tfc.append("[2:a]aformat=sample_fmts=fltp[ta]")
+                tfc.append("[mv][ma][tv][ta]concat=n=2:v=1:a=1[v][a]")
+                tmap = ["-map", "[v]", "-map", "[a]", "-c:a", "aac", "-b:a", "128k"]
+            else:
+                tfc.append("[mv][tv]concat=n=2:v=1:a=0[v]")
+                tmap = ["-map", "[v]"]
+            return ([FF, "-y", "-sws_flags", "fast_bilinear"] + tin
+                    + ["-filter_complex", ";".join(tfc)] + tmap + venc
+                    + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", tail_out])
+
+        # 先带片尾原声试；失败且片尾本有音轨(可能损坏)→ 用静音再试一次，保证片尾画面一定接上
+        done = False
+        for _silent in ([False, True] if tail_has_a else [False]):
+            try:
+                tr = subprocess.run(_tail_cmd(_silent), capture_output=True, timeout=timeout_s)
+                if tr.returncode == 0 and os.path.exists(tail_out) and os.path.getsize(tail_out) > 100000:
+                    os.replace(tail_out, part)  # 片尾版替换掉无片尾成品
+                    done = True
+                    break
+            except Exception:
+                pass
+            if os.path.exists(tail_out):
+                try:
+                    os.remove(tail_out)
+                except OSError:
+                    pass
+        if not done and on_status:
+            on_status("⚠ 片尾拼接失败，输出无片尾成品")
+
     os.replace(part, out_path)               # 完整成功才落正式名(原子替换)
     return out_path
 

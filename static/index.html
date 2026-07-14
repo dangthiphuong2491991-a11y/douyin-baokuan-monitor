@@ -834,8 +834,8 @@
         <!-- 贴纸 + BGM -->
         <div class="card" style="padding:16px 18px;margin-bottom:14px">
           <div style="font-weight:800;font-size:16px;margin-bottom:4px">🏷 贴纸 + 🎵 BGM</div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴纸</div><div class="d">从图片文件夹随机贴几张（随机大小/位置/透明度）</div></div>
-            <label class="switch"><input type="checkbox" class="fdC" id="fd_stk_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴纸</div><div class="d">从图片文件夹随机贴几张（随机大小/位置/透明度）· 选好图片文件夹才生效</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_stk_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_stk_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_stk_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_stk_folder"></div>
@@ -843,13 +843,18 @@
             <input type="number" class="fdC" id="fd_stk_count" value="4" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
             <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="0.6" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="0.8" style="width:64px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.02" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.03" style="width:64px" onchange="saveFdCfg()"></div>
-          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音</div></div>
-            <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音 · 选好音乐文件夹才生效</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_bgm_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_bgm_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.12~0.20</div></div>
             <input type="number" class="fdC" id="fd_bgm_lo" value="0.12" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.20" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">🎬 片尾视频</div><div class="d">成品最后随机接一条视频，自动缩放成 9:16 · 从文件夹里随机选</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_tail_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_tail_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_tail_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_tail_folder"></div>
         </div>
 
         <div class="ptoolbar">
@@ -1917,7 +1922,7 @@ const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band
   'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_motion_enable','fd_motion_amp','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
   'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
   'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
-  'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi'];
+  'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi','fd_tail_enable','fd_tail_folder'];
 function _fdVals(){ const v={}; _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e) v[id]=(e.type==='checkbox')?e.checked:e.value;}); v._folders=[...fdSelFolders]; return v; }
 let _fdSaveT=null;
 function saveFdCfg(){ clearTimeout(_fdSaveT); _fdSaveT=setTimeout(async()=>{try{await api('/api/ffdedup/cfg','POST',{cfg:_fdVals()});}catch(e){}},400); }
@@ -1929,7 +1934,7 @@ async function loadFdCfg(){
     _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; }});
     if(Array.isArray(v._folders)) fdSelFolders=new Set(v._folders);
   }catch(e){}
-  ['fd_out','fd_bT_folder','fd_bB_folder','fd_stk_folder','fd_bgm_folder'].forEach(syncPathShow);
+  ['fd_out','fd_bT_folder','fd_bB_folder','fd_stk_folder','fd_bgm_folder','fd_tail_folder'].forEach(syncPathShow);
   renderFdMaterials();
 }
 function buildFdCfg(){
@@ -1954,7 +1959,8 @@ function buildFdCfg(){
     mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
     stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',4),
       scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
-    bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] } };
+    bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.12),n('fd_bgm_hi',0.2)] },
+    tailvid:{ enable:on('fd_tail_enable'), folder:f('fd_tail_folder') } };
 }
 async function runFd(btn){
   const clips=fdSelectedClipPaths();
