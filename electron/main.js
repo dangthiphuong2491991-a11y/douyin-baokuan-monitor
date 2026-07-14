@@ -78,14 +78,25 @@ function waitPort(port, cb, tries = 80) {
 function startBackend() {
   waitPort(PORT, (up) => {
     if (up) { createWindow(); return; }          // 已有后端在跑就直接用
-    const py = process.platform === 'win32' ? 'python' : 'python3';
     // 【关键】强制 UTF-8：否则后端进程会把中文路径(如"7月10日去重模板")编码成"?"，
     // 而"?"是 Windows 非法文件名字符 → 生成草稿时 [Errno 22] Invalid argument
     const env = Object.assign({}, process.env, { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
-    backend = spawn(py, ['-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(PORT)],
-      { cwd: ROOT, windowsHide: true, env });
+    let cmd, args, cwd;
+    if (app.isPackaged) {
+      // 打包后：跑塞进 resources 的无窗口后端 exe（backend.spec 打的 onedir，含自带 Chromium）。
+      // 不依赖用户机器装 Python；视频号发布仍走这个后端里的 channels.py + 自带 Chromium，行为不变。
+      const be = path.join(process.resourcesPath, 'backend', 'backend.exe');
+      cmd = be; args = []; cwd = path.dirname(be);
+    } else {
+      // 开发：还是直接跑源码后端（需本机 Python）
+      cmd = process.platform === 'win32' ? 'python' : 'python3';
+      args = ['-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', String(PORT)];
+      cwd = ROOT;
+    }
+    backend = spawn(cmd, args, { cwd, windowsHide: true, env });
     backend.stdout.on('data', d => console.log('[py]', d.toString().trim()));
     backend.stderr.on('data', d => console.log('[py]', d.toString().trim()));
+    backend.on('error', e => console.log('[py] spawn error', String(e)));
     waitPort(PORT, () => createWindow());
   });
 }

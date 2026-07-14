@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+dist_electron/
 *.spec.bak
 # 本地编辑器/临时
 .claude/

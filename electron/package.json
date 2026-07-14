@@ -1,12 +1,53 @@
 {
   "name": "baokuan-monitor",
-  "version": "1.0.14",
+  "version": "1.0.20",
   "description": "爆款监控 Electron 外壳（内嵌视频号后台）",
+  "author": "baokuan",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.baokuan.monitor",
+    "productName": "爆款监控",
+    "directories": {
+      "output": "../dist_electron",
+      "buildResources": ".."
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "publish.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/backend",
+        "to": "backend"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "../app.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "artifactName": "爆款监控_Setup_${version}.exe",
+      "shortcutName": "爆款监控",
+      "deleteAppDataOnUninstall": false
+    }
   },
   "devDependencies": {
-    "electron": "^32.2.0"
+    "electron": "^32.2.0",
+    "electron-builder": "^24.13.3"
   }
 }
