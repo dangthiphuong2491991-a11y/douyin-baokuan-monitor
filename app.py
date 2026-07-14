@@ -1930,17 +1930,44 @@ def api_ch_save_state(aid: str, body: SaveStateBody):
 CH_LISTS = {"running": False, "data": {}, "for": ""}
 
 
+def _ch_lists_cache_file(aid: str) -> Path:
+    return CH_DIR / f"{aid}_lists_cache.json"
+
+
 async def _ch_fetch_lists_bg(aid: str):
     CH_LISTS.update({"running": True, "for": aid, "data": {}})
     try:
         data = await channels.fetch_lists(_ch_state(aid))
         CH_LISTS["data"] = data
         _mark_session(aid, not data.get("logged_out"))   # 被动校验
+        # 拉到了就缓存下来：下次打开秒显缓存(后台再刷)，不用每次干等十几秒
+        if not data.get("logged_out") and (data.get("dramas") or data.get("collections")):
+            try:
+                _ch_lists_cache_file(aid).write_text(json.dumps(
+                    {"dramas": data.get("dramas", []), "collections": data.get("collections", []),
+                     "activities": data.get("activities", []), "ts": datetime.now().strftime("%Y-%m-%d %H:%M")},
+                    ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
     except Exception as e:
         log_err(f"拉取视频号列表失败: {e}")
         CH_LISTS["data"] = {"error": str(e)[:120]}
     finally:
         CH_LISTS["running"] = False
+
+
+@app.get("/api/channels/account/{aid}/lists_cache")
+def api_ch_lists_cache(aid: str):
+    """秒返回上次拉到的剧集/合集缓存(供打开选剧弹窗时立刻显示，同时后台再刷新)。"""
+    try:
+        f = _ch_lists_cache_file(aid)
+        if f.exists():
+            d = json.loads(f.read_text(encoding="utf-8"))
+            return {"cached": True, "dramas": d.get("dramas", []), "collections": d.get("collections", []),
+                    "activities": d.get("activities", []), "ts": d.get("ts", "")}
+    except Exception:
+        pass
+    return {"cached": False, "dramas": [], "collections": [], "activities": []}
 
 
 @app.post("/api/channels/account/{aid}/fetch_lists")

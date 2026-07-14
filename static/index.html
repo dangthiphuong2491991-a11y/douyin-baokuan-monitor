@@ -1084,7 +1084,7 @@
                       <div style="padding:14px 20px 8px">
                         <input id="dramaSearch" placeholder="搜索名称" oninput="renderDramaList()" style="width:100%">
                       </div>
-                      <div style="padding:6px 20px;color:var(--sub);font-size:12.5px;font-weight:600;background:var(--card2)">视频号剧集信息</div>
+                      <div style="padding:6px 20px;color:var(--sub);font-size:12.5px;font-weight:600;background:var(--card2)">视频号剧集信息<span id="dramaRefreshTip" style="display:none;margin-left:8px;color:var(--acc);font-weight:400">🔄 后台刷新中…</span></div>
                       <div id="dramaList" style="flex:1;overflow:auto;padding:4px 12px 8px"></div>
                       <div style="display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line)">
                         <button class="btn ghost" onclick="closeDramaPicker()">取消</button>
@@ -2941,9 +2941,21 @@ async function openDramaPicker(){
   if(!list.length){
     const aid=[...chAccSel][0];
     if(!aid){ uiAlert('先在右侧「平台和账号配置」勾选一个已登录的视频号账号'); return; }
-    // 没数据就自动拉取（不用先去点「拉取账号数据」）
     document.getElementById('dramaSearch').value='';
-    document.getElementById('dramaList').innerHTML='<div style="padding:44px 20px;text-align:center;color:var(--sub);line-height:1.8">正在用账号登录态拉取剧集…<br><span style="font-size:12px;color:var(--dim)">要开一下无头浏览器，约 10-20 秒，请稍候</span></div>';
+    // ① 先秒显上次的缓存（不用干等十几秒），再后台静默刷新
+    try{
+      const c=await api('/api/channels/account/'+aid+'/lists_cache');
+      if(c&&c.dramas&&c.dramas.length){ window._chDramas=c.dramas; list=c.dramas; }
+    }catch(e){}
+    if(list.length){
+      _dramaPick=document.getElementById('chDrama').value||null;
+      renderDramaList();
+      document.getElementById('dramaModal').style.display='flex';
+      _refreshDramasBg(aid);          // 后台悄悄刷新，刷到新的就更新列表
+      return;
+    }
+    // ② 没缓存（第一次）→ 显示加载 + 拉取
+    document.getElementById('dramaList').innerHTML='<div style="padding:44px 20px;text-align:center;color:var(--sub);line-height:1.8">正在用账号登录态拉取剧集…<br><span style="font-size:12px;color:var(--dim)">第一次要开一下浏览器抓取，约 10 秒；之后打开就秒显</span></div>';
     document.getElementById('dramaModal').style.display='flex';
     const d=await _fetchLists();
     list=window._chDramas||[];
@@ -2962,6 +2974,15 @@ async function openDramaPicker(){
   document.getElementById('dramaSearch').value='';
   renderDramaList();
   document.getElementById('dramaModal').style.display='flex';
+}
+// 后台静默刷新剧集：不打扰用户，刷到新的就更新弹窗列表
+async function _refreshDramasBg(aid){
+  try{
+    const tip=document.getElementById('dramaRefreshTip'); if(tip) tip.style.display='inline';
+    const d=await _fetchLists();
+    if(d&&(d.dramas||[]).length){ window._chDramas=d.dramas; if(document.getElementById('dramaModal').style.display!=='none') renderDramaList(); }
+  }catch(e){}
+  finally{ const tip=document.getElementById('dramaRefreshTip'); if(tip) tip.style.display='none'; }
 }
 function closeDramaPicker(){ document.getElementById('dramaModal').style.display='none'; }
 function renderDramaList(){
