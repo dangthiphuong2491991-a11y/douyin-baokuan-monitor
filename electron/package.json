@@ -1,6 +1,6 @@
 {
   "name": "baokuan-monitor",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "description": "爆款监控 Electron 外壳（内嵌视频号后台）",
   "author": "baokuan",
   "main": "main.js",

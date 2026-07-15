@@ -92,10 +92,16 @@ def cmd_delta(argv):
         src = backend_root / rel
         if src.exists():
             shutil.copy2(src, out_dir / sha)    # 文件名=sha256(内容寻址)
-    # shell(app.asar)是否变了 —— 变了客户端会回退整包,不走差量
+    # shell(app.asar)是否变了 —— 新更新器把 app.asar 也当内容寻址块(名字=shell_hash)下载、
+    # 停程序时原子改名就地换掉,不再回退整包。所以 shell 变了也要把 asar 拷进池子。
     shell_changed = old.get("shell_hash") != new.get("shell_hash")
+    if shell_changed and new.get("shell_hash"):
+        asar_src = win_unpacked / "resources" / "app.asar"
+        if asar_src.exists():
+            shutil.copy2(asar_src, out_dir / new["shell_hash"])   # 文件名=shell_hash(内容寻址)
     print(f"[delta] 改动 backend 文件 {len(changed)} 个 / 去重内容块 {len(seen_sha)} 个, {total/1048576:.2f}MB")
-    print(f"[delta] shell(app.asar)变了? {shell_changed}  → {'客户端将回退整包安装' if shell_changed else '纯差量即可'}")
+    print(f"[delta] shell(app.asar)变了? {shell_changed}  → "
+          f"{'已把 app.asar 拷进池子(客户端走壳增量,不整包)' if shell_changed else '壳没变'}")
     print(f"[delta] 内容寻址文件已拷到 → {out_dir}  (共 {len(list(out_dir.iterdir()))} 块)")
     for r in changed[:30]:
         print("   ~", r)

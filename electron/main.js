@@ -397,6 +397,8 @@ async function checkUpdateOnStartup() {
       versionInfo: info, curVersion: cur, verGt: _verGt,
       stopBackend: stopBackendProc, startBackend: restartBackendProc,
       reloadUI: () => { try { win && win.webContents.reloadIgnoringCache(); } catch (e) {} },
+      // 壳(app.asar)增量：文件都就绪、助手已拉起后，退出整个程序(助手等退出后换壳并重启)
+      quitForShellSwap: () => { try { if (backend && !backend.killed) backend.kill(); } catch (e) {} app.exit(0); },
       onFullInstaller, log: (m) => console.log('[upd]', m),
     });
     if (res && res.mode === 'diff' && res.files > 0) {
