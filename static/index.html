@@ -3777,10 +3777,51 @@ function saveDiscTopN(){
   const echo=document.getElementById('topNEcho'); if(echo) echo.textContent=v;
   try{ localStorage.setItem('discTopN', String(v)); }catch(e){}
 }
+// 同一合集折叠成一条：按当前排序，只留每个合集里最靠前(播放/点赞最高)的那条做代表，
+// 其余同合集的隐藏。代表条挂上「共N集/挖到M集」+「下载整集」。返回展示用列表。
+function discCollapse(arr){
+  const seen=new Set(), cnt={}, list=[];
+  arr.forEach(p=>{ if(p.mix_id) cnt[p.mix_id]=(cnt[p.mix_id]||0)+1; });
+  arr.forEach(p=>{
+    if(p.mix_id){
+      if(seen.has(p.mix_id)) return;                 // 同合集后续的都并进代表条
+      seen.add(p.mix_id);
+      list.push(Object.assign({},p,{_mix:true,_mixDug:cnt[p.mix_id]}));
+    }else list.push(p);
+  });
+  return list;
+}
+function discSorted(){
+  const sk=document.getElementById('discSort')?.value||'digg';
+  return [...discItems].sort((a,b)=>discSortVal(b,sk)-discSortVal(a,sk));   // 后端已取前N，这里只按所选榜重排
+}
+// 发现页合集条：代表条显示合集名+集数+「下载整集」(整合集只下缺集)
+function discMixBar(p){
+  if(!p._mix) return '';
+  const nm=p.mix_name?'《'+esc(p.mix_name)+'》':'';
+  const tot=p.mix_total>1?`共${p.mix_total}集`:'合集';
+  const dug=p._mixDug>1?` · 本次挖到${p._mixDug}集`:'';
+  const prog=(p.mix&&p.mix.followed)?` · 已下${p.mix.local_have}/${p.mix.cloud_total}`:'';
+  return `<div class="pmix has" onclick="event.stopPropagation()">📺 ${nm?nm+' · ':''}${tot}${dug}${prog}
+    <button class="mixnew" onclick="event.stopPropagation();dlMixCard('${p.aweme_id}',this)">⬇ 下载整集</button></div>`;
+}
+async function dlMixCard(aid,btn){
+  if(!await ensureDownloadDir()) return;
+  const old=btn.innerHTML; btn.disabled=true; btn.textContent='合集入队中…';
+  try{
+    const d=await api('/api/download_mix','POST',{aweme_id:aid,platform:PLATFORM});
+    btn.textContent='✓ 已入队';
+    toast(`合集${d.mix_name?'《'+d.mix_name+'》':''}已加入下载队列${d.total?'（共'+d.total+'集，只下缺的）':''}，进度看「任务中心」`);
+    setTimeout(()=>{btn.innerHTML=old;btn.disabled=false;},2600);
+  }catch(e){ uiAlert(e.message); btn.innerHTML=old; btn.disabled=false; }
+}
 function renderDisc(){
   const grid=document.getElementById('discGrid');
   const sk=document.getElementById('discSort')?.value||'digg';
-  const arr=[...discItems].sort((a,b)=>discSortVal(b,sk)-discSortVal(a,sk));   // 后端已取前N，这里只按所选榜重排
+  const arr=discCollapse(discSorted());   // 折叠合集：同合集只留最高的那条
+  const folded=discItems.length-arr.length;
+  const meta=document.getElementById('discMeta');
+  if(meta&&folded>0&&!/合集/.test(meta.textContent)) meta.textContent+=` · 已把同合集折叠成 ${arr.filter(p=>p._mix).length} 个合集（省掉 ${folded} 条重复）`;
   const hot=(k)=>k===sk?'color:var(--acc2);font-weight:700':'';   // 高亮当前排序榜的那个指标
   grid.innerHTML=arr.length? arr.map(p=>`
     <div class="post ${discSel.has(p.aweme_id)?'sel':''} ${p.downloaded?'done':''}" data-aid="${p.aweme_id}" onclick="toggleDisc('${p.aweme_id}')">
@@ -3789,8 +3830,9 @@ function renderDisc(){
         <span class="playbtn" style="pointer-events:auto;cursor:pointer" onclick="event.stopPropagation();openPlayer('${p.aweme_id}','${esc(p.type)}','${esc(p.desc).replace(/'/g,"\\'")}')">▶</span>
         <span class="ptype">${discHeadline(p,sk)} · ${esc(p.duration||p.type)}</span>
         <span class="pcheck">✓</span>
+        ${p._mix?`<span class="pdone" style="background:var(--acc2);color:#fff;left:auto;right:7px;top:7px">📺 合集${p.mix_total>1?'·'+p.mix_total+'集':''}</span>`:''}
         ${p.downloaded?'<span class="pdone">已下载</span>':''}
-        ${p.is_monitored?'<span class="pdone" style="background:var(--acc2);color:#fff;left:auto;right:34px">已监控</span>':''}
+        ${!p._mix&&p.is_monitored?'<span class="pdone" style="background:var(--acc2);color:#fff;left:auto;right:34px">已监控</span>':''}
       </div>
       <div class="pcap" title="${esc(p.desc)}">${esc(p.desc)}</div>
       <div class="pstat">@${esc(p.author)} · ${p.age_hours}h前</div>
@@ -3800,7 +3842,7 @@ function renderDisc(){
         <span style="${hot('dark')}" title="黑马比 点赞÷粉丝">🐴${p.dark==null?'—':p.dark}</span>
         <span style="${hot('qual')}" title="互动质量 (评论+转发+收藏)÷点赞">💬${p.qual||0}%</span>
       </div>
-      ${mixChip(p)}
+      ${p._mix?discMixBar(p):mixChip(p)}
     </div>`).join('') : emptyBox('🕳️',
       discSrc==='library'?'这个时间范围内，库里博主没有发布作品':'没有符合条件的爆款',
       discSrc==='library'?'把时间范围放宽（最近7天/30天）再试；或去「博主监控」加更活跃、经常出爆款的号':'试试：降低点赞门槛 / 放宽到48h / 换更火的种子视频');
@@ -3818,7 +3860,7 @@ function updateDiscBar(){
   const b=document.getElementById('dlDiscBtn'); if(b) b.disabled=discSel.size===0;
 }
 function selectAllDisc(){
-  const undone=discItems.filter(p=>!p.downloaded);
+  const undone=discCollapse(discSorted()).filter(p=>!p.downloaded);   // 只选屏上可见的(合集只算代表条)
   const all=undone.length && undone.every(p=>discSel.has(p.aweme_id));
   if(all) discSel.clear(); else undone.forEach(p=>discSel.add(p.aweme_id));
   renderDisc();

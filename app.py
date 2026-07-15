@@ -566,6 +566,16 @@ def _mix_annot(it: dict, platform: str = "douyin") -> dict:
             "this_downloaded": bool(ep and ep in done_eps)}
 
 
+def _mix_raw(it: dict) -> dict:
+    """作品自带的合集身份(不管有没有下载过都给)——发现页靠它把同一合集的多条折叠成一条。
+    _mix_annot 只对下载过的合集返回,陌生合集拿不到 mix_id,所以单独给一份裸数据。"""
+    m = it.get("mix") or {}
+    if not m.get("mix_id"):
+        return {"mix_id": "", "mix_name": "", "mix_total": 0, "episode": 0}
+    return {"mix_id": str(m.get("mix_id") or ""), "mix_name": m.get("mix_name") or "",
+            "mix_total": _to_int(m.get("total")) or 0, "episode": _to_int(it.get("episode")) or 0}
+
+
 def _blogger(sec_uid: str) -> dict:
     for b in config["bloggers"]:
         if b["sec_user_id"] == sec_uid:
@@ -1434,6 +1444,7 @@ async def api_discover(body: DiscoverBody):
                         "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
                         "downloaded": _is_downloaded(rid, seen_authors_tags[nick]) or _mix_annot(it, platform).get("this_downloaded", False),
                         "mix": _mix_annot(it, platform),
+                        **_mix_raw(it),   # 发现页折叠合集用(mix_id/mix_name/mix_total/episode)
                         "is_monitored": any(b["sec_user_id"] == it["author_id"]
                                             and b.get("platform", "douyin") == platform
                                             for b in config["bloggers"]),
@@ -1507,6 +1518,7 @@ async def api_library_search(body: LibrarySearchBody):
                 "duration": f"{dur // 60000}:{dur % 60000 // 1000:02d}" if dur else "",
                 "downloaded": _is_downloaded(aid, tags) or _mix_annot(it, platform).get("this_downloaded", False),
                 "mix": _mix_annot(it, platform),
+                **_mix_raw(it),   # 发现页折叠合集用(mix_id/mix_name/mix_total/episode)
                 "is_monitored": True,
                 **rank_metrics(it, age_h, follower),
             })
