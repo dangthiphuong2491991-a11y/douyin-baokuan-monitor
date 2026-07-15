@@ -77,6 +77,21 @@ def _depad_path(path):
     return os.path.join(d, b2)
 
 
+def _ffmpeg_err(stderr_bytes) -> str:
+    """从 ffmpeg stderr 里挑出真正的错误行,而不是盲取最后300字符(那常只截到进度行 frame=.../time=N/A,
+    把真错误藏起来)。优先含错误关键词的行,其次最后几行非进度行。"""
+    s = (stderr_bytes or b"").decode("utf-8", "ignore")
+    lines = [l.strip() for l in s.splitlines() if l.strip()]
+    KW = ("Error", "error", "Invalid", "invalid", "failed", "Failed", "Conversion",
+          "No such", "does not", "annot", "nable to", "could not", "Could not",
+          "not found", "denied", "Permission", "buffer", "Overflow", "overflow")
+    errs = [l for l in lines if any(k in l for k in KW) and "frame=" not in l and "time=" not in l]
+    if errs:
+        return " ‖ ".join(errs[-3:])[:400]
+    non_prog = [l for l in lines if "frame=" not in l and "size=" not in l and "bitrate=" not in l][-4:]
+    return (" ‖ ".join(non_prog) or s[-300:])[:400]
+
+
 def _rr(pair, dflt):
     """[lo,hi] 里随机取一个；单值直接用；空=默认。"""
     if pair is None or pair == "":
@@ -300,8 +315,13 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
     vg = cfg.get("vignette") or {}
     if vg.get("enable"):
         vf += f",vignette=angle={_rr(vg.get('range'), 0.15):.3f}"  # 轻暗角
-    if cfg.get("noise"):
-        vf += ",noise=alls=6:allf=t"                         # 极淡噪点
+    # 【实锤·2026-07-15】noise 滤镜与音频 afreqshift(声纹去重核心武器)同处一张滤镜图会让 AAC 编码器整条报
+    # -22(Error submitting audio frame)——这是"家家有本难念的经"等开了噪点的批次全失败的真凶(与掐头去尾无关)。
+    # afreqshift 去重价值(确定性打穿Shazam声纹)远高于极淡噪点,且噪点与裁剪/调色/运镜/蒙版/透视/AB高度冗余,
+    # 故 afreqshift 开启时(默认开)跳过 noise,规避这个 ffmpeg 滤镜冲突。
+    _afreqshift_on = (cfg.get("audio") or {}).get("freqshift", True)
+    if cfg.get("noise") and not _afreqshift_on:
+        vf += ",noise=alls=6:allf=t"                         # 极淡噪点(仅在关掉频移时才叠,否则冲突)
     # 【动态运镜·改结构去重】放大留余量,裁切窗口按正弦缓慢漂移(x/y 不同频率→椭圆浮动,永不重复)。
     # 逐帧裁切位置都不同→彻底打乱平台的逐帧感知哈希/帧序列指纹;漂移幅度=amp(默认4%)且极慢→肉眼无感。
     motion = cfg.get("motion") or {}
@@ -575,7 +595,7 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
                 os.remove(part)              # 失败也不留残片
         except OSError:
             pass
-        raise RuntimeError("ffmpeg失败：" + r.stderr.decode("utf-8", "ignore")[-300:])
+        raise RuntimeError("ffmpeg失败：" + _ffmpeg_err(r.stderr))
 
     # ---- 每集结束插视频：把成品按集边界切开，每集后面(含最后一集)各插一条随机视频(9:16,不去重) ----
     # 对已渲染好的干净成品做二次拼接——它的音频是规矩的 aac 立体声，concat 才稳；插入片段不走去重
