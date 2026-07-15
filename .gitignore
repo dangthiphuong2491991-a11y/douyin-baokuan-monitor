@@ -34,3 +34,5 @@ electron/sdk_dump/
 update_manifest*.json
 update_pool_delta/
 _build_*.log
+update_pool_delta_25/
+dist_electron_v25/
