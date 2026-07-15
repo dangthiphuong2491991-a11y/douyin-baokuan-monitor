@@ -1465,6 +1465,7 @@ class LibrarySearchBody(BaseModel):
     min_like: int = 20000
     scan: int = 20   # 免登录每个博主最多约20条可见，翻页无效，不做无谓翻页
     top: int = 50    # 按点赞排序后取前 N（用户可在发现页自定义）
+    max_per: int = 600   # 每个博主最多抓多少条(时间窗内)——高产短剧号一天几百条,160条根本盖不住30天,给足深度
     platform: str = "douyin"
 
 
@@ -1477,7 +1478,10 @@ async def api_library_search(body: LibrarySearchBody):
     now = time.time()
     bloggers = [b for b in config["bloggers"] if b.get("platform", "douyin") == platform]
     hours = body.hours
+    # 每号最多抓 max_per 条(换算成页,每页20)。窗内智能停页仍生效——正常号早停,高产号才吃满上限。
+    max_pages = max(1, min(400, (max(20, body.max_per) + 19) // 20))
     sem = asyncio.Semaphore(4)   # 并发上限压低：登录账号并发太多易被判机器人→封号
+    capped = []                  # 抓满上限、可能还有更多没抓到的博主(高产号)→前端如实提示
 
     async def one(b):
         sec_uid = b["sec_user_id"]
@@ -1485,12 +1489,14 @@ async def api_library_search(body: LibrarySearchBody):
         async with sem:
             try:
                 if hours:   # 有时间窗：抓到超出范围就停
-                    awemes = await fetch_posts_windowed(sec_uid, hours, max_pages=8, platform=platform)
+                    awemes = await fetch_posts_windowed(sec_uid, hours, max_pages=max_pages, platform=platform)
                 else:       # 不限时间：抓最新一页够排序
                     awemes = await fetch_posts_raw(sec_uid, max_count=20, platform=platform)
             except Exception as e:
                 log_err(f"库内查找 {nickname} 失败: {e}")
                 return []
+        if hours and len(awemes) >= max_pages * 20:   # 抓满了页上限没自然停 → 这号窗内作品可能还没抓全
+            capped.append(nickname)
         cache = POSTS_CACHE.setdefault(sec_uid, {})
         tags = _downloaded_tags(nickname, platform)
         follower = _to_int(b.get("follower_count"))
@@ -1531,7 +1537,8 @@ async def api_library_search(body: LibrarySearchBody):
     top = max(1, min(500, body.top or 50))   # 取前 N：用户可自定义（1~500）
     items = items[:top]
     return {"bloggers": len(bloggers), "hours": hours,
-            "total": total, "count": len(items), "items": items}
+            "total": total, "count": len(items), "items": items,
+            "capped": capped, "max_per": body.max_per}
 
 
 @app.get("/api/downloads")

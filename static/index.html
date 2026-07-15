@@ -334,6 +334,14 @@
               <input type="number" id="discTopN" value="50" min="1" max="500" step="10" title="按点赞从高到低，取前多少条（1~500）"
                 style="width:80px;margin:0 6px" onchange="saveDiscTopN()"> 条
             </label>
+            <label id="libDepthWrap" style="color:var(--sub);font-size:13px">每号抓取深度
+              <select id="libDepth" style="margin-left:6px" title="每个博主最多抓多少条最新作品再排名。高产短剧号一天几百条，深度不够就盖不住整个时间范围（但越深越慢）">
+                <option value="300">快速（每号≤300条·最快）</option>
+                <option value="600" selected>标准（每号≤600条）</option>
+                <option value="1500">深挖（每号≤1500条·慢，覆盖更全）</option>
+                <option value="3000">拉满（每号≤3000条·很慢）</option>
+              </select>
+            </label>
             <label id="pagesWrap" style="color:var(--sub);font-size:13px;display:none">抓取深度
               <select id="pages" style="margin-left:6px">
                 <option value="1">快速（1页·约20条）</option>
@@ -3763,6 +3771,7 @@ function switchSrc(src){
   document.querySelectorAll('#page-discover .tab').forEach(t=>t.classList.toggle('on',t.dataset.src===src));
   document.getElementById('seedWrap').style.display = src==='related'?'block':'none';
   document.getElementById('libHint').style.display = src==='library'?'block':'none';
+  document.getElementById('libDepthWrap').style.display = src==='library'?'inline-block':'none';
   document.getElementById('pagesWrap').style.display = src==='related'?'inline-block':'none';
   document.getElementById('relatedNote').style.display = src==='related'?'block':'none';
   document.getElementById('discBtn').textContent = src==='library'?'🔍 在库里查找':'🔍 开始挖掘';
@@ -3780,11 +3789,14 @@ async function runDiscover(btn){
     if(discSrc==='library'){
       const n=(curStatus?.bloggers||[]).length;
       if(!n){ uiAlert('你的库里还没有博主，先去「博主监控」加几个'); return; }
+      const maxPer=parseInt(document.getElementById('libDepth').value)||600;
       btn.disabled=true; btn.textContent='🔎 查找中…';
-      grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…</div>`;
-      d=await api('/api/library_search','POST',{hours,top:getTopN(),platform:PLATFORM});
+      grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…<br><span style="color:var(--dim);font-size:12px">每号最多抓 ${maxPer} 条，高产号+30天可能要几分钟，请耐心等</span></div>`;
+      d=await api('/api/library_search','POST',{hours,top:getTopN(),max_per:maxPer,platform:PLATFORM});
       const win=hours?`${hours}h内`:'全部';
-      document.getElementById('discMeta').textContent=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，按点赞取前 ${d.count}`;
+      let meta=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，按点赞取前 ${d.count}`;
+      if((d.capped||[]).length) meta+=` · ⚠${d.capped.length}个高产号(${d.capped.slice(0,3).join('、')}${d.capped.length>3?'…':''})作品超过${d.max_per}条没抓全，想更全把「抓取深度」调大`;
+      document.getElementById('discMeta').textContent=meta;
     }else{
       const seeds=document.getElementById('seedInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
       if(!seeds.length){ uiAlert('先粘贴至少一条种子视频链接'); return; }
