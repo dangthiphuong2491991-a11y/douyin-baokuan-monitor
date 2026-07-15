@@ -1,11 +1,25 @@
 // 视频号发布·Electron 原生实现（照抄小V猫）：隐藏 BrowserWindow(backgroundThrottling:false)
 // + webContents.debugger(CDP) 驱动上传/填表/发表。无独立浏览器窗口、不被"窗口不可见"节流。
 // 逻辑对齐 channels.py 的 upload()，但换成不被节流的 Electron webContents。
-const { BrowserWindow, session, screen } = require('electron');
+const { BrowserWindow, session, screen, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const ROOT = path.join(__dirname, '..');
+
+// 【关键·和后端 app.py 完全一致】打包版数据在 %LOCALAPPDATA%\爆款监控\data,不在安装目录旁。
+// 之前 publish.js 用 ROOT/data 找 channels/*.json → 打包机上找不到 → 取会话报"账号未登录"。
+function _dataDir() {
+  try {
+    if (app && app.isPackaged) {
+      const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      return path.join(local, '爆款监控', 'data');
+    }
+  } catch (e) {}
+  return path.join(ROOT, 'data');   // 开发态：项目目录下 data/
+}
+function _chJson(aid) { return path.join(_dataDir(), 'channels', aid + '.json'); }
 const CREATE_URL = 'https://channels.weixin.qq.com/platform/post/create';
 // 【关键】正常 Chrome UA——Electron 默认 UA 带"Electron/爆款监控"会被视频号二维码/接口拒绝。
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
@@ -23,7 +37,7 @@ function log(msg) {
 
 // 把账号 cookie 播种进它专属 partition（和 main.js inject-cookies 一样）
 async function injectCookies(part, aid) {
-  const f = path.join(ROOT, 'data', 'channels', aid + '.json');
+  const f = _chJson(aid);
   if (!fs.existsSync(f)) throw new Error('账号未登录');
   const data = JSON.parse(fs.readFileSync(f, 'utf-8'));
   const ses = session.fromPartition(part);
@@ -396,7 +410,8 @@ async function syncCookiesToJson(aid, ses) {
       sameSite: c.sameSite === 'strict' ? 'Strict' : (c.sameSite === 'lax' ? 'Lax' : 'None'),
       expires: (c.expirationDate && c.expirationDate > 0) ? c.expirationDate : -1,
     }));
-    const f = path.join(ROOT, 'data', 'channels', aid + '.json');
+    const f = _chJson(aid);
+    try { fs.mkdirSync(path.dirname(f), { recursive: true }); } catch (e) {}
     let data = {};
     try { data = JSON.parse(fs.readFileSync(f, 'utf-8')); } catch (e) {}
     data.cookies = cks;
@@ -422,8 +437,10 @@ async function dumpAuthMat(params, onStatus) {
   const part = 'persist:ch_' + aid;
   const ses = session.fromPartition(part);
   try { ses.setUserAgent(UA); } catch (e) {}
-  await injectCookies(part, aid);
-  // cookies(全量)
+  // 尽力从 json 补种 cookie(找不到不致命)——真正的活登录本来就在 webview 分区里(用户扫码登录处),
+  // 之前这里读不到 json 就抛"账号未登录"、把整个取会话搞挂 = 打包机发布卡死的根因。
+  try { await injectCookies(part, aid); } catch (e) { st('injectCookies跳过(用分区活会话): ' + String(e).slice(0, 40)); }
+  // cookies(全量)——直接取分区里的(扫码登录后就有)
   let cookies = [];
   try { cookies = (await ses.cookies.get({ domain: 'weixin.qq.com' })).map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path })); } catch (e) {}
   // localStorage 需要加载一个同源页面才能读
@@ -439,6 +456,11 @@ async function dumpAuthMat(params, onStatus) {
   } catch (e) { st('ls读取失败:' + e); }
   cleanup();
   st('导出完成 cookies=' + cookies.length + ' lsKeys=' + Object.keys(ls || {}).length);
+  // 分区里没有有效 sessionid = 这个号在这台机器上没真正登录过(或已失效)→ 给个清楚提示,别再含糊报"账号未登录"
+  const hasSession = cookies.some((c) => c.name === 'sessionid' && c.value && c.value.length > 8);
+  if (!hasSession) {
+    return { ok: false, msg: '该账号在本机没有有效登录态,请在软件里重新扫码登录这个视频号后再发布', cookies, localStorage: ls };
+  }
   return { ok: true, cookies, localStorage: ls };
 }
 

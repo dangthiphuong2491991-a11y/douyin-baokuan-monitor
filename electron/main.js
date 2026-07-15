@@ -10,6 +10,17 @@ const os = require('os');
 const { publishOne, electronLogin, electronCheckLogin, captureFlow, dumpUploadSdk, dumpAuthMat } = require('./publish');
 
 const ROOT = path.join(__dirname, '..');   // 项目根（app.py 所在）
+// 数据目录：打包版=%LOCALAPPDATA%\爆款监控\data(和 app.py 一致);开发态=项目 data/。
+// 之前用 ROOT/data 找账号 cookie,打包机上找不到→发布报"账号未登录"。
+function _dataDir() {
+  try {
+    if (app.isPackaged) {
+      const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      return path.join(local, '爆款监控', 'data');
+    }
+  } catch (e) {}
+  return path.join(ROOT, 'data');
+}
 const PORT = 8790;
 const PUB_PORT = 8791;                      // Electron 原生发布服务端口（Python 后端调它）
 let backend = null;
@@ -189,7 +200,7 @@ function createWindow() {
 
 // 把某账号的 cookie（Playwright storage_state 文件）注入到它专属的 partition 会话
 ipcMain.handle('inject-cookies', async (_e, aid) => {
-  const f = path.join(ROOT, 'data', 'channels', aid + '.json');
+  const f = path.join(_dataDir(), 'channels', aid + '.json');
   if (!fs.existsSync(f)) return { ok: false, error: '账号未登录' };
   let data;
   try { data = JSON.parse(fs.readFileSync(f, 'utf-8')); }
