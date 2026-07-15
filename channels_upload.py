@@ -261,7 +261,14 @@ def publish_video(auth: ChannelsAuth, video_path: str, title: str, drama: dict =
         meta = probe_video(video_path)
         w, h, dur = meta["width"], meta["height"], meta["duration"]
         cov_jpg = cover_path or (video_path + ".cover.jpg")
-        cover_bytes = make_cover(video_path, cov_jpg)
+        if cover_path:
+            cover_bytes = make_cover(video_path, cov_jpg)
+        else:
+            # 【防矩阵连坐】没指定封面时不再固定取 0.5s 帧——每条从不同随机时刻抽帧,
+            # 让封面图哈希逐条不同,打散平台"同封面聚簇"的矩阵连坐钩子。
+            import random
+            at = round(random.uniform(dur * 0.15, dur * 0.75), 2) if dur and dur > 2 else 0.5
+            cover_bytes = make_cover(video_path, cov_jpg, at_sec=at)
 
         with open(video_path, "rb") as f:
             vbytes = f.read()

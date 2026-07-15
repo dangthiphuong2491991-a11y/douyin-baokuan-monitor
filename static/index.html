@@ -1171,6 +1171,7 @@
                   </div>
                   <div id="matrixBar" style="display:none;border-top:1px solid var(--line);padding:12px 18px;gap:12px;align-items:center;background:var(--card);flex-wrap:wrap">
                     <label style="font-size:12px;color:var(--sub);white-space:nowrap">📅 每号每天最多 <input type="number" id="mxPerDay" value="0" min="0" max="500" style="width:62px" oninput="mxUpdateHint()"> 条 <span style="color:var(--dim)">(0=不限·一次发完)</span></label>
+                    <label style="font-size:12px;color:var(--sub);white-space:nowrap;display:flex;align-items:center;gap:5px" title="批量发布时给每条文案加一个轮换短前缀,让批内文案条条不同→躲开平台"同批一样文案"的矩阵连坐限流。你的原文案完整保留在后面。取消勾选=文案严格一字不差。"><input type="checkbox" id="mxDiversify" checked style="width:auto">🛡 防连坐(文案加轮换前缀,原文保留)</label>
                     <span id="matrixHint" style="color:var(--sub);font-size:12px;flex:1;min-width:160px">未选择</span>
                     <button class="btn ghost" onclick="matrixPreview()">👁 预览计划</button>
                     <button class="btn" onclick="matrixSubmit(this)" style="background:var(--acc2);color:#fff;font-weight:700">🚀 一键矩阵发布</button>
@@ -2491,7 +2492,8 @@ function mxBody(){
     return {account_id:a.id, folders, dramas, drama_titles};
   });
   return { assigns, title:(typeof XV_DEF_TITLE!=='undefined'?XV_DEF_TITLE:''), tags:[],
-    per_day: parseInt(document.getElementById('mxPerDay')?.value)||0, clip_gap_sec: 0 };
+    per_day: parseInt(document.getElementById('mxPerDay')?.value)||0, clip_gap_sec: 0,
+    diversify: document.getElementById('mxDiversify')?.checked !== false };
 }
 async function matrixPreview(){
   const b=mxBody(); if(!b.assigns.length){ uiAlert('先给账号勾选要发的剧'); return; }

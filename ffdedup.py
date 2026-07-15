@@ -277,8 +277,9 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         zoom = 1.0 + max(0.0, _rr(cfg.get("crop"), 0.0))
     rot = _rr(cfg.get("rotate"), 0.0) * random.choice([-1, 1])   # 微旋转(度,随机正负)
     lens = _rr(cfg.get("lens"), 0.0)                             # 广角桶形畸变 k1
-    # 旋转/畸变会带进黑边,预先多放大一点作补偿,最后中心裁回 1080x1920
-    margin = 1.0 + abs(math.radians(rot)) * 1.9 + max(0.0, lens) * 1.2
+    persp = max(0.0, min(0.03, _rr(cfg.get("perspective"), 0.0)))  # 透视微形变幅度(占宽高比例);比平移更能扰DCT低频,无感
+    # 旋转/畸变/透视都会带进黑边,预先多放大一点作补偿,最后中心裁回 1080x1920
+    margin = 1.0 + abs(math.radians(rot)) * 1.9 + max(0.0, lens) * 1.2 + persp * 1.6
     zt = max(1.0, zoom) * margin
     Wz, Hz = (int(W * zt) // 2) * 2, (int(H * zt) // 2) * 2
     vf = f"scale={Wz}:{Hz}:force_original_aspect_ratio=increase,crop={Wz}:{Hz}"
@@ -286,6 +287,11 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         vf += f",lenscorrection=k1={-lens:.4f}:k2=0:i=bilinear"   # 负k1=桶形(广角感)
     if rot:
         vf += f",rotate={rot:.3f}*PI/180:c=black"
+    if persp:                                  # 透视微形变:四角各独立向内微移(<margin余量→裁切后不露黑边),比平移更能扰DCT低频
+        dx = lambda: round(random.uniform(0, persp) * Wz, 1)
+        dy = lambda: round(random.uniform(0, persp) * Hz, 1)
+        vf += (f",perspective=x0={dx()}:y0={dy()}:x1={Wz-dx()}:y1={dy()}"
+               f":x2={dx()}:y2={Hz-dy()}:x3={Wz-dx()}:y3={Hz-dy()}:sense=source")
     vf += (f",crop={W}:{H},"
            f"eq=brightness={bri}:contrast={con}:saturation={sat}:gamma={gam:.3f},hue=h={hue},"
            f"unsharp=5:5:{sharp}")
@@ -309,19 +315,32 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
     fc.append(f"{vsrc}{vf}[m]")
     cur = "[m]"
 
-    # ---- 音频链：变速同步(atempo,修音画不同步bug) + 音调微移 + 音量微调 + EQ抖动 ----
+    # ---- 音频链[核心去重·打穿声纹指纹] rubberband高质量变速+变调 + 频移(击碎Shazam地标) + 动态压缩 + EQ抖动 ----
+    # 视频号判"重复"的真凶是音频指纹(Shazam式峰值地标哈希):它抗重编码/音量/EQ/混BGM,只怕"变调+频移"。
+    # 实测:rubberband tempo=spd 与视频 setpts=PTS/spd 同向→音画同步不漂;afreqshift 确定性平移频谱峰值坐标→
+    # 经典地标失配。全程人耳无感。tempo 必须=spd(勿乘随机系数,否则渐进漂移坏音画同步)。
     audio = cfg.get("audio") or {}
     has_audio = n_main > 1 or _probe_has_audio(main_paths[0])
     acur = None
     if has_audio:
-        pitch = max(0.9, min(1.1, _rr(audio.get("pitch"), 1.0) or 1.0))   # 变调不变速
+        pitch = _rr(audio.get("pitch"), None)
+        if not pitch:                                          # 默认也给±1.5%微变调(无感),用户可用 pitch 覆盖
+            pitch = round(random.uniform(0.985, 1.015), 4)
+        pitch = max(0.9, min(1.1, pitch))
         avol = max(0.5, min(1.5, _rr(audio.get("volume"), 1.0) or 1.0))
-        tempo = max(0.5, min(2.0, spd / pitch))
-        af = (f"asetrate=44100*{pitch:.4f},aresample=44100,"
-              f"atempo={tempo:.4f},volume={avol:.3f}")
-        if audio.get("eq", True):                             # 频谱扰动(打碎音频指纹)
-            af += (f",bass=g={round(random.uniform(-1.2, 1.2), 2)}"
-                   f",treble=g={round(random.uniform(-1.2, 1.2), 2)}")
+        tempo = max(0.5, min(2.0, spd))
+        af = f"aresample=44100,rubberband=tempo={tempo:.4f}:pitch={pitch:.4f}"
+        if audio.get("freqshift", True):                       # 【核心】频移:确定性打散Shazam声纹地标,人耳无感(±10~20Hz)
+            hz = round(random.uniform(10, 20), 1) * random.choice([-1, 1])
+            af += f",afreqshift=shift={hz}"
+        if audio.get("compress", True):                        # 动态压缩:改响度包络/声纹另一维,无感
+            af += (f",acompressor=threshold=-18dB:ratio={round(random.uniform(2.5, 3.5), 1)}"
+                   f":attack=20:release=250:makeup=2")
+        af += f",volume={avol:.3f}"
+        if audio.get("eq", True):                              # 频谱扰动(再打碎频域指纹)
+            af += (f",bass=g={round(random.uniform(-1.5, 1.5), 2)}"
+                   f",treble=g={round(random.uniform(-1.5, 1.5), 2)}")
+        af += ",aresample=44100"
         fc.append(f"{asrc}{af}[aud]")
         acur = "[aud]"
 
@@ -440,22 +459,37 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         vbr = float(cfg.get("vbitrate", 0) or 0)
     except Exception:
         vbr = 0
+    # 【编码指纹随机化·防矩阵连坐】每条变体的编码器/GOP/码率/profile/音频码率/handler 全随机——否则一批变体
+    # 走同一套参数,平台可按"同一产线指纹"把矩阵号聚簇连坐限流。再删 H.264 SEI(x264版本串/取证user_data),不动像素。
+    gop = random.choice([48, 60, 72, 90, 120])
     # 有N卡就用 GPU 硬件编码(h264_nvenc)——比 libx264 快 5-10 倍；默认自动用,可用 use_gpu:false 关
     use_gpu = cfg.get("use_gpu", True) and _nvenc_ok()
     if use_gpu:
-        venc = ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq"]
+        venc = ["-c:v", "h264_nvenc", "-preset", random.choice(["p3", "p4", "p5", "p6"]),
+                "-tune", "hq", "-g", str(gop), "-bf", str(random.choice([2, 3])),
+                "-profile:v", random.choice(["high", "main"])]
         if vbr > 0:
-            venc += ["-rc", "vbr", "-b:v", f"{vbr:g}M", "-maxrate", f"{vbr:g}M", "-bufsize", f"{vbr*2:g}M"]
+            jb = round(vbr * (1 + random.uniform(-0.04, 0.04)), 3)   # ±4% 码率抖动打散粗筛聚类
+            venc += ["-rc", "vbr", "-b:v", f"{jb:g}M", "-maxrate", f"{jb*1.1:g}M", "-bufsize", f"{jb*2:g}M"]
         else:
-            venc += ["-rc", "vbr", "-cq", "23"]     # 恒定质量(相当于 crf)
+            venc += ["-rc", "vbr", "-cq", str(random.choice([21, 22, 23, 24]))]
     else:
-        venc = ["-c:v", "libx264", "-preset", cfg.get("preset", "veryfast")]
+        x264p = (f"keyint={gop}:min-keyint={gop//2}:scenecut={random.choice([0, 40])}"
+                 f":ref={random.choice([2, 3, 4])}:bframes={random.choice([2, 3])}"
+                 f":aq-mode={random.choice([1, 2])}:sei=0:no-info=1")   # sei=0 去 x264 版本水印
+        venc = ["-c:v", "libx264", "-preset", cfg.get("preset") or random.choice(["veryfast", "faster", "fast"]),
+                "-profile:v", random.choice(["high", "main"]), "-x264-params", x264p]
         if vbr > 0:
-            venc += ["-b:v", f"{vbr:g}M", "-maxrate", f"{vbr:g}M", "-bufsize", f"{vbr*2:g}M"]
+            jb = round(vbr * (1 + random.uniform(-0.04, 0.04)), 3)
+            venc += ["-b:v", f"{jb:g}M", "-maxrate", f"{jb:g}M", "-bufsize", f"{jb*2:g}M"]
         else:
-            venc += ["-crf", str(cfg.get("crf", 20))]
-    cmd += venc + ["-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-shortest",
-                   "-map_metadata", "-1"]                     # 清空元数据(去重)
+            venc += ["-crf", str(cfg.get("crf") or random.randint(19, 23))]
+    audio_br = random.choice(["96k", "112k", "128k", "160k"])   # 音频码率抖动(原恒定128k=现成指纹)
+    cmd += venc + ["-c:a", "aac", "-b:a", audio_br, "-pix_fmt", "yuv420p", "-shortest",
+                   "-map_metadata", "-1", "-map_chapters", "-1",     # 清空元数据+章节
+                   "-metadata", "handler_name=", "-metadata:s:v", "handler_name=",
+                   "-metadata:s:a", "handler_name=",                 # 清 handler(VideoHandler/SoundHandler=现成容器指纹)
+                   "-bsf:v", "filter_units=remove_types=6"]          # 删 H.264 SEI(版本串/取证user_data),不动一帧像素
     if cfg.get("fake_meta", True):
         # 清空后写入随机"拍摄时间"——全空的元数据本身也是特征,伪装成普通视频更自然
         dt = datetime.now() - timedelta(days=random.uniform(1, 45), hours=random.uniform(0, 20))

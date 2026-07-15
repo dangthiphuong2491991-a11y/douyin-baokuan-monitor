@@ -2506,6 +2506,7 @@ class MatrixBody(BaseModel):
     per_day: int = 0                 # 每个号一天最多发几条(0=不限,全部立即排队);超出的滚到后续天
     start_time: str = ""             # 排期起始 "YYYY-MM-DD HH:MM"(空=现在)
     clip_gap_sec: int = 0            # 同号相邻两条的间隔秒(防频控)
+    diversify: bool = True           # 防连坐:批内每条文案加轮换前缀(原文完整保留);False=文案严格一字不差
 
 
 def _folder_vids_sorted(root: Path, folder: str):
@@ -2583,6 +2584,25 @@ def api_ch_matrix_preview(body: MatrixBody):
             "accounts": list(by_acct.values())}
 
 
+# 【矩阵防连坐】一批号用一模一样的文案会被平台聚成"矩阵簇"集中审+连坐限流。
+# 默认给每条文案加一个轮换的短前缀,让批内文案条条不同——你的原文案一字不动保留在后面。
+# 想要文案严格一字不差:settings.matrix_diversify 设 False 即完全关闭(退回原文案)。
+_MX_HOOKS = ["", "终于等到更新", "看到最后破防了", "这段太上头", "谁懂这剧的含金量", "全网都在追的",
+             "今日份追剧", "这剧我锁死了", "刷到就是缘分", "一口气看完过瘾", "熬夜也要追完",
+             "这反转谁扛得住", "追到停不下来", "本周最上头"]
+
+
+def _diversify_title(title: str, seq: int, on: bool = True) -> str:
+    """给矩阵批内每条文案加轮换前缀(原文案完整保留在后)。on=False 时原样返回(严格一字不差)。"""
+    if not on:
+        return title
+    hook = _MX_HOOKS[seq % len(_MX_HOOKS)]        # 按序号轮换,批内尽量不撞
+    if not hook:
+        return title
+    sep = random.choice(["｜", " · ", " ", "，"])   # 分隔符也随机,进一步打散
+    return f"{hook}{sep}{title}"
+
+
 @app.post("/api/channels/matrix/upload")
 def api_ch_matrix_upload(body: MatrixBody):
     """执行：按分配表建发布任务并入队。每账号独立 worker 并行发；已发过的自动跳过。"""
@@ -2624,7 +2644,7 @@ def api_ch_matrix_upload(body: MatrixBody):
                 size_mb = 0
             UPLOAD_TASKS[tid] = {"id": tid, "account_id": aid, "account_name": acc.get("name", aid),
                                  "account_wxid": acc.get("wxid", ""),
-                                 "title": body.title or Path(vp).stem,
+                                 "title": _diversify_title(body.title or Path(vp).stem, n, body.diversify),
                                  "video_path": vp, "tags": body.tags, "desc": body.desc,
                                  "cover_path": "", "link": "", "original": False,
                                  "statement": "", "location": "", "collection": "",
