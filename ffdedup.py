@@ -412,6 +412,24 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
             cur = f"[o{idx}]"
             idx += 1
 
+    # ---- AB低透明度叠加：无关素材B极低透明度铺满叠在正片A上,每个像素被B混合污染→打乱画面感知哈希(pHash) ----
+    # 【只碰画面②层,不碰音频③】纯像素层保险,透明度低(默认8~14%)人眼近乎无感;素材复用蒙版那套随机指派(各变体叠不同B、组内不撞)。
+    ab = cfg.get("abblend") or {}
+    abvids = scan(ab.get("folder"), _VEXT)
+    if ab.get("enable") and abvids:
+        _abk = re.sub(r'(_变体\d+)?\.mp4$', '', os.path.basename(out_path))
+        bv = _assign_mask(abvids, ab.get("folder"), _abk, variant[0], variant[1])
+        aa = _rr(ab.get("opacity"), None)
+        if not aa:
+            aa = round(random.uniform(0.08, 0.14), 3)       # 默认B层透明度8~14%(>25%会有重影,肉眼可见)
+        aa = max(0.02, min(0.30, aa))
+        inputs += ["-stream_loop", "-1"] + HWDEC + ["-i", bv]   # B是视频→无限循环铺满A全长+GPU解码
+        fc.append(f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,"
+                  f"format=rgba,colorchannelmixer=aa={aa:.3f}[abv{idx}]")
+        fc.append(f"{cur}[abv{idx}]overlay=0:0:shortest=1[abo{idx}]")   # B循环无限、A有限→shortest收在A长度
+        cur = f"[abo{idx}]"
+        idx += 1
+
     # ---- BGM：随机一首铺满，跟处理后的原声混音 ----
     bgm = cfg.get("bgm") or {}
     music = scan(bgm.get("folder"), _AEXT)

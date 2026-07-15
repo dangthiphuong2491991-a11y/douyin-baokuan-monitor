@@ -775,6 +775,25 @@
           </div>
         </div>
 
+        <!-- AB 低透明度叠加 -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">🅰🅱 AB 低透明度叠加 <span style="color:var(--dim);font-weight:400;font-size:12px">拿一条无关视频B，以极低透明度全程铺满叠在正片上——每个像素被B轻微污染，打乱画面感知哈希(pHash)。透明度低时肉眼近乎无感。</span></div>
+          <div style="font-size:12px;color:var(--warn);margin-bottom:8px">⚠ 只改画面②层，不碰音频③——治不了"音频判重"，只是画面层再加一道保险。透明度别超 20%（会有重影）。</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用 / B素材文件夹</div><div class="d">从这个文件夹随机抽一条B铺满全程（各变体自动挑不同B、组内不撞）</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_ab_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_ab_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_ab_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_ab_folder">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">B层透明度（随机区间）</div><div class="d">建议 0.08~0.14 · 越低越无感、去重略弱，越高越狠但可能有重影</div></div>
+            <input type="number" class="fdC" id="fd_ab_op_lo" value="0.08" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">~</span>
+            <input type="number" class="fdC" id="fd_ab_op_hi" value="0.14" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
+          </div>
+        </div>
+
         <!-- 变速 + 调色 -->
         <div class="card" style="padding:16px 18px;margin-bottom:14px">
           <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 变速 + 调色 <span style="color:var(--dim);font-weight:400;font-size:12px">变速破时长指纹(有用)；调色几乎不改指纹(实测≈0)、只是观感伪装</span></div>
@@ -1923,7 +1942,8 @@ const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band
   'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_motion_enable','fd_motion_amp','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
   'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
   'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
-  'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi','fd_tail_enable','fd_tail_folder'];
+  'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi','fd_tail_enable','fd_tail_folder',
+  'fd_ab_enable','fd_ab_folder','fd_ab_op_lo','fd_ab_op_hi'];
 function _fdVals(){ const v={}; _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e) v[id]=(e.type==='checkbox')?e.checked:e.value;}); v._folders=[...fdSelFolders]; return v; }
 let _fdSaveT=null;
 function saveFdCfg(){ clearTimeout(_fdSaveT); _fdSaveT=setTimeout(async()=>{try{await api('/api/ffdedup/cfg','POST',{cfg:_fdVals()});}catch(e){}},400); }
@@ -1935,7 +1955,7 @@ async function loadFdCfg(){
     _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; }});
     if(Array.isArray(v._folders)) fdSelFolders=new Set(v._folders);
   }catch(e){}
-  ['fd_out','fd_bT_folder','fd_bB_folder','fd_stk_folder','fd_bgm_folder','fd_tail_folder'].forEach(syncPathShow);
+  ['fd_out','fd_bT_folder','fd_bB_folder','fd_ab_folder','fd_stk_folder','fd_bgm_folder','fd_tail_folder'].forEach(syncPathShow);
   renderFdMaterials();
 }
 function buildFdCfg(){
@@ -1952,6 +1972,9 @@ function buildFdCfg(){
     zoom:[n('fd_zoom_lo',1.02),n('fd_zoom_hi',1.05)],
     rotate:[n('fd_rot_lo',0.2),n('fd_rot_hi',0.6)],
     lens:[n('fd_lens_lo',0.08),n('fd_lens_hi',0.10)],
+    perspective:[0.008,0.015],   // A3透视微形变(比平移更扰DCT低频,无感);引擎已支持,这里默认开
+    abblend:{ enable:on('fd_ab_enable'), folder:f('fd_ab_folder'),
+      opacity:[n('fd_ab_op_lo',0.08),n('fd_ab_op_hi',0.14)] },
     vignette:{ enable:on('fd_vig_enable'), range:[n('fd_vig_lo',0.10),n('fd_vig_hi',0.25)] },
     motion:{ enable:on('fd_motion_enable'), amp:n('fd_motion_amp',0.04) },
     trim:{ head:[n('fd_head_lo',0.3),n('fd_head_hi',1.2)], tail:[n('fd_tail_lo',0),n('fd_tail_hi',1.0)] },
