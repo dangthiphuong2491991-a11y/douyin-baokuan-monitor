@@ -576,6 +576,27 @@ def _mix_raw(it: dict) -> dict:
             "mix_total": _to_int(m.get("total")) or 0, "episode": _to_int(it.get("episode")) or 0}
 
 
+def _fold_collections_topn(items: list, top: int):
+    """把同一合集折叠成一条(留点赞最高的代表,记该合集在结果里命中几集),再取前 top。
+    这样"取前N"是 N 部不同的剧,而不是同一部剧的 N 集(否则前100全被最火那几部剧的分集占满,合集就那么点)。
+    items 需已按点赞降序。返回 (前top的折叠列表, 折叠后不同剧+独立视频的总数)。"""
+    cnt = {}
+    for it in items:
+        mid = it.get("mix_id")
+        if mid:
+            cnt[mid] = cnt.get(mid, 0) + 1
+    seen, folded = set(), []
+    for it in items:                       # 已按 digg 降序 → 每合集第一个遇到的就是点赞最高的代表
+        mid = it.get("mix_id")
+        if mid:
+            if mid in seen:
+                continue
+            seen.add(mid)
+            it["mix_found"] = cnt[mid]     # 该合集在时间窗内命中的集数(前端"本次挖到N集"用真实值)
+        folded.append(it)
+    return folded[:top], len(folded)
+
+
 def _blogger(sec_uid: str) -> dict:
     for b in config["bloggers"]:
         if b["sec_user_id"] == sec_uid:
@@ -1455,8 +1476,8 @@ async def api_discover(body: DiscoverBody):
 
     items = sorted(found.values(), key=lambda x: x["digg"], reverse=True)
     top = max(1, min(500, body.top or 50))   # 取前 N：用户可自定义（1~500）
-    items = items[:top]
-    return {"scanned": scanned, "hours": body.hours, "min_like": body.min_like,
+    items, distinct = _fold_collections_topn(items, top)   # 先折叠合集再取前N → 前N是N部不同的剧
+    return {"scanned": scanned, "hours": body.hours, "min_like": body.min_like, "distinct": distinct,
             "count": len(items), "items": items}
 
 
@@ -1533,10 +1554,10 @@ async def api_library_search(body: LibrarySearchBody):
     results = await asyncio.gather(*[one(b) for b in bloggers])
     items = [it for sub in results for it in sub]
     items.sort(key=lambda x: x["digg"], reverse=True)
-    total = len(items)
-    top = max(1, min(500, body.top or 50))   # 取前 N：用户可自定义（1~500）
-    items = items[:top]
-    return {"bloggers": len(bloggers), "hours": hours,
+    total = len(items)                        # 原始命中作品数(含同剧分集)
+    top = max(1, min(500, body.top or 50))    # 取前 N：用户可自定义（1~500）
+    items, distinct = _fold_collections_topn(items, top)   # 先折叠合集再取前N → 前N是N部不同的剧
+    return {"bloggers": len(bloggers), "hours": hours, "distinct": distinct,
             "total": total, "count": len(items), "items": items,
             "capped": capped, "max_per": body.max_per}
 
