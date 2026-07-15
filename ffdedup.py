@@ -469,8 +469,12 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         else:
             inputs += ["-stream_loop", "-1"] + HWDEC + ["-i", fv]       # 特效视频→无限循环
         if mode == "screen" and not is_img:                             # 黑底粒子:screen让黑透掉,只留亮部
-            fc.append(f"[{idx}:v]scale={W}:{H},fps=30,format=yuv420p[fxv{idx}]")
-            fc.append(f"{cur}[fxv{idx}]blend=all_mode=screen:all_opacity={op:.3f}:shortest=1[fxo{idx}]")
+            # 【关键·2026-07-15实锤】screen 混合必须在 RGB(gbrp)里做!在 yuv420p 里 blend=screen 会把
+            # chroma(U/V)通道也按screen公式抬高(128→192),U↑+V↑=更蓝更红=整帧染成品红(实测灰底叠后变(222,80,239))。
+            # 转 gbrp→screen→再转回 yuv420p 才是正确的"黑透掉只留亮部"。
+            fc.append(f"[{idx}:v]scale={W}:{H},fps=30,format=gbrp[fxv{idx}]")
+            fc.append(f"{cur}format=gbrp[fxb{idx}]")
+            fc.append(f"[fxb{idx}][fxv{idx}]blend=all_mode=screen:all_opacity={op:.3f}:shortest=1,format=yuv420p[fxo{idx}]")
         else:                                                           # 边框/透明素材:保留自带alpha(×op调强弱)覆盖
             fc.append(f"[{idx}:v]scale={W}:{H},fps=30,format=rgba,colorchannelmixer=aa={op:.3f}[fxv{idx}]")
             fc.append(f"{cur}[fxv{idx}]overlay=0:0:shortest=1[fxo{idx}]")
