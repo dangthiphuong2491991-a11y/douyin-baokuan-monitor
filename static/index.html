@@ -314,11 +314,6 @@
           </div>
           <div id="libHint" style="color:var(--sub);font-size:13px">扫描你「博主监控」库里的 <b id="libCount">0</b> 个博主，把<b>时间范围内</b>的作品按<b>点赞从高到低</b>排，取前 <b id="topNEcho">50</b>。</div>
           <div class="row" style="display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap">
-            <label id="minLikeWrap" style="color:var(--sub);font-size:13px">点赞门槛 ≥
-              <input type="number" id="minLike" value="20000" min="0" step="1000" placeholder="自己填"
-                style="width:120px;margin-left:6px">
-              <span id="minLikeHint" style="color:var(--dim);margin-left:4px"></span>
-            </label>
             <label style="color:var(--sub);font-size:13px">时间范围
               <select id="hours" style="margin-left:6px" onchange="onHoursChange()">
                 <option value="12">最近 12 小时</option>
@@ -3768,14 +3763,13 @@ function switchSrc(src){
   document.querySelectorAll('#page-discover .tab').forEach(t=>t.classList.toggle('on',t.dataset.src===src));
   document.getElementById('seedWrap').style.display = src==='related'?'block':'none';
   document.getElementById('libHint').style.display = src==='library'?'block':'none';
-  document.getElementById('minLikeWrap').style.display = src==='related'?'inline-block':'none';
   document.getElementById('pagesWrap').style.display = src==='related'?'inline-block':'none';
   document.getElementById('relatedNote').style.display = src==='related'?'block':'none';
   document.getElementById('discBtn').textContent = src==='library'?'🔍 在库里查找':'🔍 开始挖掘';
 }
 
 async function runDiscover(btn){
-  const min_like=parseInt(document.getElementById('minLike').value)||0;
+  const min_like=0;   // 已去掉点赞门槛:取前N本身就是按点赞排,再设地板只会误伤,没意义
   const hours=getHours();
   discSel.clear();
   document.getElementById('discTools').style.display='none';
@@ -3798,7 +3792,7 @@ async function runDiscover(btn){
       btn.disabled=true; btn.textContent='🔎 挖掘中…（约1分钟）';
       grid.innerHTML='<div class="empty"><div class="big">⏳</div>正在抓取相关推荐并筛选爆款…<br>相关推荐每页间隔30秒，请稍候</div>';
       d=await api('/api/discover','POST',{seeds,min_like,hours,pages,top:getTopN(),platform:PLATFORM});
-      document.getElementById('discMeta').textContent=`扫描 ${d.scanned} 条，命中 ${d.count} 条（${hours}h内·赞≥${fmtN(min_like)}）`;
+      document.getElementById('discMeta').textContent=`扫描 ${d.scanned} 条，命中 ${d.count} 条（${hours}h内按点赞取前${getTopN()}）`;
     }
     discItems=d.items||[];
     renderDisc();
