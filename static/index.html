@@ -794,6 +794,29 @@
           </div>
         </div>
 
+        <!-- 特效叠加(剪映式飘雪/光效/边框) -->
+        <div class="card" style="padding:16px 18px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:16px;margin-bottom:4px">✨ 特效叠加 <span style="color:var(--dim);font-weight:400;font-size:12px">剪映式飘雪/光效/边框——叠一层特效素材到画面上，动态粒子每帧不同、逐帧pHash全打乱，还显得像有意加的创意效果</span></div>
+          <div style="font-size:12px;color:var(--warn);margin-bottom:8px">⚠ 只改画面②层，不碰音频③。剪映自带特效是加密素材扒不出来 → 你放<b>自己的透明特效素材</b>进文件夹（黑底粒子视频选「粒子」模式，边框/透明PNG选「边框」模式），网上搜「粒子叠加 overlay 素材」一堆。</div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">启用 / 特效素材文件夹</div><div class="d">从这里随机抽一条特效叠上（各变体自动挑不同的、组内不撞）· 支持 mp4/mov/webm 视频 和 png 图片</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_fx_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_fx_folder', saveFdCfg)">📁 选择</button>
+            <span id="fd_fx_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
+            <input type="hidden" class="fdC" id="fd_fx_folder">
+          </div>
+          <div class="setrow" style="padding:9px 0">
+            <div class="l"><div class="t">混合模式 / 透明度</div><div class="d"><b>粒子(screen)</b>=黑底雪花/光效，黑色透掉只留亮部；<b>边框(overlay)</b>=边框PNG或透明素材，保留素材自带形状 · 透明度建议 0.7~0.9</div></div>
+            <select class="fdC" id="fd_fx_mode" style="width:120px" onchange="saveFdCfg()">
+              <option value="screen">粒子(黑底雪花/光效)</option>
+              <option value="over">边框(透明PNG/素材)</option>
+            </select>
+            <input type="number" class="fdC" id="fd_fx_op_lo" value="0.7" min="0.05" max="1" step="0.05" style="width:70px;margin-left:8px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">~</span>
+            <input type="number" class="fdC" id="fd_fx_op_hi" value="0.9" min="0.05" max="1" step="0.05" style="width:70px" onchange="saveFdCfg()">
+          </div>
+        </div>
+
         <!-- 变速 + 调色 -->
         <div class="card" style="padding:16px 18px;margin-bottom:14px">
           <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎚 变速 + 调色 <span style="color:var(--dim);font-weight:400;font-size:12px">变速破时长指纹(有用)；调色几乎不改指纹(实测≈0)、只是观感伪装</span></div>
@@ -1943,7 +1966,8 @@ const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band
   'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
   'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
   'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi','fd_tail_enable','fd_tail_folder',
-  'fd_ab_enable','fd_ab_folder','fd_ab_op_lo','fd_ab_op_hi'];
+  'fd_ab_enable','fd_ab_folder','fd_ab_op_lo','fd_ab_op_hi',
+  'fd_fx_enable','fd_fx_folder','fd_fx_mode','fd_fx_op_lo','fd_fx_op_hi'];
 function _fdVals(){ const v={}; _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e) v[id]=(e.type==='checkbox')?e.checked:e.value;}); v._folders=[...fdSelFolders]; return v; }
 let _fdSaveT=null;
 function saveFdCfg(){ clearTimeout(_fdSaveT); _fdSaveT=setTimeout(async()=>{try{await api('/api/ffdedup/cfg','POST',{cfg:_fdVals()});}catch(e){}},400); }
@@ -1955,7 +1979,7 @@ async function loadFdCfg(){
     _FDC_IDS.forEach(id=>{const e=document.getElementById(id); if(e&&id in v){ if(e.type==='checkbox') e.checked=!!v[id]; else e.value=v[id]; }});
     if(Array.isArray(v._folders)) fdSelFolders=new Set(v._folders);
   }catch(e){}
-  ['fd_out','fd_bT_folder','fd_bB_folder','fd_ab_folder','fd_stk_folder','fd_bgm_folder','fd_tail_folder'].forEach(syncPathShow);
+  ['fd_out','fd_bT_folder','fd_bB_folder','fd_ab_folder','fd_fx_folder','fd_stk_folder','fd_bgm_folder','fd_tail_folder'].forEach(syncPathShow);
   renderFdMaterials();
 }
 function buildFdCfg(){
@@ -1975,6 +1999,8 @@ function buildFdCfg(){
     perspective:[0.008,0.015],   // A3透视微形变(比平移更扰DCT低频,无感);引擎已支持,这里默认开
     abblend:{ enable:on('fd_ab_enable'), folder:f('fd_ab_folder'),
       opacity:[n('fd_ab_op_lo',0.08),n('fd_ab_op_hi',0.14)] },
+    fx:{ enable:on('fd_fx_enable'), folder:f('fd_fx_folder'), mode:f('fd_fx_mode')||'screen',
+      opacity:[n('fd_fx_op_lo',0.7),n('fd_fx_op_hi',0.9)] },
     vignette:{ enable:on('fd_vig_enable'), range:[n('fd_vig_lo',0.10),n('fd_vig_hi',0.25)] },
     motion:{ enable:on('fd_motion_enable'), amp:n('fd_motion_amp',0.04) },
     trim:{ head:[n('fd_head_lo',0.3),n('fd_head_hi',1.2)], tail:[n('fd_tail_lo',0),n('fd_tail_hi',1.0)] },

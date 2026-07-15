@@ -430,6 +430,33 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         cur = f"[abo{idx}]"
         idx += 1
 
+    # ---- 特效叠加：剪映式飘雪/光效/边框 —— 叠一层特效素材 ----
+    # 粒子视频(黑底)走 screen 混合(黑透掉只留白色雪花/光);边框PNG或带alpha素材走 overlay(保留素材自带透明形状)。
+    # 【只碰画面②层】动态粒子每帧位置都不同→逐帧pHash全打乱,且看着像有意加的创意效果(比AB鬼影更像原创)。素材复用蒙版那套随机指派。
+    fx = cfg.get("fx") or {}
+    fxfiles = scan(fx.get("folder"), _VEXT + (".webm",)) + scan(fx.get("folder"), _IEXT)
+    if fx.get("enable") and fxfiles:
+        _fxk = re.sub(r'(_变体\d+)?\.mp4$', '', os.path.basename(out_path))
+        fv = _assign_mask(fxfiles, fx.get("folder"), _fxk, variant[0], variant[1])
+        op = _rr(fx.get("opacity"), None)
+        if not op:
+            op = round(random.uniform(0.7, 0.9), 3)
+        op = max(0.05, min(1.0, op))
+        is_img = os.path.splitext(fv)[1].lower() in _IEXT
+        mode = (fx.get("mode") or "screen").lower()
+        if is_img:
+            inputs += ["-loop", "1", "-i", fv]                          # 边框PNG→单帧循环铺满全长
+        else:
+            inputs += ["-stream_loop", "-1"] + HWDEC + ["-i", fv]       # 特效视频→无限循环
+        if mode == "screen" and not is_img:                             # 黑底粒子:screen让黑透掉,只留亮部
+            fc.append(f"[{idx}:v]scale={W}:{H},fps=30,format=yuv420p[fxv{idx}]")
+            fc.append(f"{cur}[fxv{idx}]blend=all_mode=screen:all_opacity={op:.3f}:shortest=1[fxo{idx}]")
+        else:                                                           # 边框/透明素材:保留自带alpha(×op调强弱)覆盖
+            fc.append(f"[{idx}:v]scale={W}:{H},fps=30,format=rgba,colorchannelmixer=aa={op:.3f}[fxv{idx}]")
+            fc.append(f"{cur}[fxv{idx}]overlay=0:0:shortest=1[fxo{idx}]")
+        cur = f"[fxo{idx}]"
+        idx += 1
+
     # ---- BGM：随机一首铺满，跟处理后的原声混音 ----
     bgm = cfg.get("bgm") or {}
     music = scan(bgm.get("folder"), _AEXT)
