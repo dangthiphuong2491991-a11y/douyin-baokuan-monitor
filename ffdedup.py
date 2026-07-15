@@ -17,6 +17,8 @@ import numpy as np
 from PIL import Image
 
 FF = imageio_ffmpeg.get_ffmpeg_exe()
+# 打包版后端 console=False 没有控制台：不加这个标志，每跑一次 ffmpeg 客户屏幕上就弹一个黑窗
+NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _NVENC = None      # None=未检测；True/False=可用性(缓存)
 
@@ -31,7 +33,7 @@ def _nvenc_ok() -> bool:
         r = subprocess.run(
             [FF, "-hide_banner", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:d=1",
              "-c:v", "h264_nvenc", "-f", "null", "-"],
-            capture_output=True, timeout=30)
+            capture_output=True, timeout=30, creationflags=NOWIN)
         _NVENC = (r.returncode == 0)
     except Exception:
         _NVENC = False
@@ -87,7 +89,7 @@ def _rr(pair, dflt):
 
 def _probe_wh(path):
     try:
-        out = subprocess.run([FF, "-i", path], capture_output=True).stderr.decode("utf-8", "ignore")
+        out = subprocess.run([FF, "-i", path], capture_output=True, creationflags=NOWIN).stderr.decode("utf-8", "ignore")
         m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", out)
         if m:
             return int(m.group(1)), int(m.group(2))
@@ -98,7 +100,7 @@ def _probe_wh(path):
 
 def _probe_has_audio(path):
     try:
-        out = subprocess.run([FF, "-i", path], capture_output=True).stderr.decode("utf-8", "ignore")
+        out = subprocess.run([FF, "-i", path], capture_output=True, creationflags=NOWIN).stderr.decode("utf-8", "ignore")
         return "Audio:" in out
     except Exception:
         return True
@@ -106,7 +108,7 @@ def _probe_has_audio(path):
 
 def _probe_dur(path):
     try:
-        out = subprocess.run([FF, "-i", path], capture_output=True).stderr.decode("utf-8", "ignore")
+        out = subprocess.run([FF, "-i", path], capture_output=True, creationflags=NOWIN).stderr.decode("utf-8", "ignore")
         m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", out)
         if m:
             return int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
@@ -147,7 +149,7 @@ def _dhash_frame(video, t, size=8):
         r = subprocess.run(
             [FF, "-v", "error", "-ss", f"{max(0.0, t):.2f}", "-i", str(video),
              "-frames:v", "1", "-vf", f"scale={size+1}:{size}", "-pix_fmt", "gray",
-             "-f", "rawvideo", "-"], capture_output=True, timeout=30)
+             "-f", "rawvideo", "-"], capture_output=True, timeout=30, creationflags=NOWIN)
         buf = r.stdout
         if len(buf) < (size + 1) * size:
             return None
@@ -474,7 +476,7 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
     # 别误杀正在跑的任务(真卡死才会到上限)。上限放到2小时。
     timeout_s = min(7200, max(1800, int(dur_est * 12 + 600)))
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout_s)
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout_s, creationflags=NOWIN)
     except subprocess.TimeoutExpired:
         try:
             if os.path.exists(part):
@@ -552,7 +554,8 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         done = False
         for _silent in (False, True):
             try:
-                tr = subprocess.run(_ins_cmd(_silent), capture_output=True, timeout=timeout_s)
+                tr = subprocess.run(_ins_cmd(_silent), capture_output=True, timeout=timeout_s,
+                                    creationflags=NOWIN)
                 if tr.returncode == 0 and os.path.exists(ins_out) and os.path.getsize(ins_out) > 100000:
                     os.replace(ins_out, part)
                     done = True

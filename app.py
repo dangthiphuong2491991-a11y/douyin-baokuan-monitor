@@ -2152,7 +2152,7 @@ def _capture_cover(video_path: str, mode: str = "first", sec: float = 0.0) -> st
     try:
         subprocess.run([dedup.FF, "-y", "-ss", str(t), "-i", str(video_path),
                         "-frames:v", "1", "-q:v", "3", str(out)],
-                       capture_output=True, timeout=40)
+                       capture_output=True, timeout=40, creationflags=dedup.NOWIN)
     except Exception as e:
         log_err(f"抽帧封面失败: {e}")
     return str(out) if out.exists() else ""
@@ -2208,7 +2208,7 @@ def api_ch_thumb(path: str):
         try:
             subprocess.run([dedup.FF, "-y", "-ss", "0.5", "-i", str(v),
                             "-frames:v", "1", "-vf", "scale=240:-1", "-q:v", "4", str(tp)],
-                           capture_output=True, timeout=40)
+                           capture_output=True, timeout=40, creationflags=dedup.NOWIN)
         except Exception as e:
             log_err(f"缩略图失败: {e}")
     if not tp.exists():
@@ -3569,7 +3569,8 @@ def api_ffdedup_stop():
     try:
         exe = os.path.basename(ffdedup.FF)   # imageio 的 ffmpeg exe 名
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/IM", exe, "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/IM", exe, "/F"], capture_output=True,
+                           creationflags=dedup.NOWIN)
         else:
             subprocess.run(["pkill", "-f", exe], capture_output=True)
     except Exception as e:
@@ -3707,7 +3708,7 @@ def _ffd_probe_one(path: str) -> dict:
         pass
     try:
         txt = subprocess.run([dedup.FF, "-i", path], capture_output=True,
-                             timeout=25).stderr.decode("utf-8", "ignore")
+                             timeout=25, creationflags=dedup.NOWIN).stderr.decode("utf-8", "ignore")
         m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", txt)
         if m:
             info["dur"] = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])

@@ -13,6 +13,8 @@ import imageio_ffmpeg
 # 优先用环境变量指定的完整 ffmpeg（imageio 自带的那个 AAC 解码器有问题，处理不了音频/变速）。
 # 想要变速+音频去重的，装个完整 ffmpeg 并设 FFMPEG_BIN 指过去即可；否则自动退化成"视频去重"。
 FF = os.environ.get("FFMPEG_BIN") or imageio_ffmpeg.get_ffmpeg_exe()
+# 打包版后端 console=False 没有控制台：不加这个标志，每跑一次 ffmpeg 客户屏幕上就弹一个黑窗
+NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # 各处理项默认值（前端可逐项开关+改参数）
 DEFAULTS = {
@@ -36,7 +38,8 @@ def _rand_tag():
 def probe_duration(path) -> float:
     """读时长（秒）。掐头去尾要用。"""
     try:
-        r = subprocess.run([FF, "-i", str(path)], capture_output=True, text=True, errors="ignore")
+        r = subprocess.run([FF, "-i", str(path)], capture_output=True, text=True, errors="ignore",
+                           creationflags=NOWIN)
         m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", r.stderr)
         if m:
             h, mi, s = m.groups()
@@ -111,7 +114,8 @@ def build_cmd(inp, outp, o, duration=0.0, audio_copy=False):
 
 async def _run(cmd):
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        creationflags=NOWIN)
     _, err = await proc.communicate()
     return proc.returncode, (err or b"").decode("utf-8", "ignore")
 
@@ -123,7 +127,8 @@ async def source_ok(inp) -> bool:
     try:
         proc = await asyncio.create_subprocess_exec(
             FF, "-y", "-ss", "2", "-i", str(inp), "-frames:v", "1", tmp,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            creationflags=NOWIN)
         await proc.communicate()
         from PIL import Image
         with Image.open(tmp) as im:

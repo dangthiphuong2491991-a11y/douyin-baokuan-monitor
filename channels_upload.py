@@ -27,6 +27,8 @@ import httpx
 import imageio_ffmpeg
 
 _FF = imageio_ffmpeg.get_ffmpeg_exe()
+# 打包版后端 console=False 没有控制台：不加这个标志，每跑一次 ffmpeg 客户屏幕上就弹一个黑窗
+_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 _BASE = "https://channels.weixin.qq.com"
@@ -150,7 +152,8 @@ def cdn_upload(client: httpx.Client, up: dict, data: bytes, filename: str,
 def probe_video(path: str) -> dict:
     """用 ffmpeg 读时长/宽高(解析 stderr,不依赖 ffprobe)。"""
     try:
-        r = subprocess.run([_FF, "-hide_banner", "-i", path], capture_output=True, timeout=60)
+        r = subprocess.run([_FF, "-hide_banner", "-i", path], capture_output=True, timeout=60,
+                           creationflags=_NOWIN)
         err = r.stderr.decode("utf-8", "ignore")
     except Exception:
         err = ""
@@ -169,7 +172,8 @@ def probe_video(path: str) -> dict:
 def make_cover(path: str, out_jpg: str, at_sec: float = 0.5) -> bytes:
     """截取一帧做封面 JPEG,返回字节。"""
     subprocess.run([_FF, "-y", "-hide_banner", "-ss", str(at_sec), "-i", path,
-                    "-vframes", "1", "-q:v", "3", out_jpg], capture_output=True, timeout=60)
+                    "-vframes", "1", "-q:v", "3", out_jpg], capture_output=True, timeout=60,
+                   creationflags=_NOWIN)
     with open(out_jpg, "rb") as f:
         return f.read()
 
