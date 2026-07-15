@@ -3,9 +3,9 @@
   "notes": "📥 更新时有【下载进度条】了——显示已下载 MB / 百分比，不再干转圈让人以为卡死；下载失败也会明确提示。🧹 修复【更新后目录里留着两个安装包】——新版启动后台反复重试，等旧程序一退出就把旧包清掉。🔧 数据搬到系统固定目录 %LOCALAPPDATA%\\爆款监控\\（自动迁移、视频号登录和账号档案一点不丢），为下一版「客户端也能内嵌视频号后台」做准备。🚀 含上一版全部：拉剧集/发布卡死根治、窄条视频根治(setsar)、素材来源只扫下载文件夹+点进去看视频信息、导出按「时间 剧名」建一级文件夹、按剧切块不跨剧合并、贴纸默认值。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
   "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.19/BaokuanMonitor.exe",
-  "desktop_version": "1.0.25",
-  "desktop_notes": "🚀 更新提速：从这一版起，以后更新只下载真正改动的那几十 MB（程序外壳也走增量了），不再动辄整包 600MB。本次仍是整包，是为了把新的增量能力装上，之后就快了。\n🔴 修复打包版「发布一直排队 / 取会话失败:账号未登录」——指向正确数据目录、直接用扫码活会话。\n🧹 根治「发布/去重时弹出一摞黑色窗口」——ffmpeg 控制台窗全部隐藏。\n🆕 含前版全部：发布间隔随机秒防封号、实名验证自动停发+常驻提醒+批量重发。数据/登录/设置不受影响。",
-  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.25/BaokuanMonitor_Setup_1.0.25.exe",
-  "update_manifest_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.25/update_manifest.json",
+  "desktop_version": "1.0.26",
+  "desktop_notes": "🔥 去重大升级：新增「打穿音频声纹」去重（视频号判重复的真凶是原声，这一刀无感击碎声纹地标）+ 编码指纹随机化 + 透视微形变 + AB 低透明度叠加 + 剪映式「特效叠加」（飘雪/光效/边框，自备透明素材）。\n🐛 修「一键去重批量整批失败」——噪点滤镜和声纹去重撞车导致整条报错，已根治。\n🎨 修「特效叠加把画面染成品红」——screen 混合色彩空间修正。\n🔍 发现爆款修好：① 数据抓全（高产号不再只抓 160 条，新增「每号抓取深度」可调）② 去掉没用的点赞门槛 ③ 合集折叠，让「取前 100」= 100 部不同的剧，不再被同一部剧的分集占满。\n🆕 含前版全部：增量更新、发布修复、黑窗根治、防封号。数据/登录/设置不受影响。",
+  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.26/BaokuanMonitor_Setup_1.0.26.exe",
+  "update_manifest_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.26/update_manifest.json",
   "update_pool_base": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/updates/"
 }
