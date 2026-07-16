@@ -263,6 +263,10 @@
             <button class="btn ghost" onclick="pasteCookie()">📋 粘贴 Cookie</button>
             <button class="btn ghost" id="logoutBtn" onclick="logout()" style="display:none">退出登录</button>
           </div>
+          <div id="tkProxyRow" style="display:none;margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:12px;color:var(--sub);white-space:nowrap">🌐 代理(挂梯子)：</span>
+            <input id="tkProxy" placeholder="留空=用系统全局代理/TUN｜Clash系统代理模式填 http://127.0.0.1:7890" style="flex:1;min-width:240px;font-size:12px" onchange="saveTkProxy()">
+          </div>
           <div id="loginHint" style="color:var(--dim);font-size:12px;margin-top:8px">扫码：弹出抖音页用手机扫码 ｜ 浏览器导入：先在 Chrome/Edge 登录 douyin.com 再点 ｜ 粘贴：从浏览器复制 cookie</div>
         </div>
 
@@ -755,8 +759,8 @@
           <div style="font-weight:800;font-size:16px;margin-bottom:4px">🎭 上下蒙版 <span style="color:var(--dim);font-weight:400;font-size:12px">上下各一条视频，线性渐隐融合到主画面边缘（厚度/透明度可调，越薄越柔和越像剪映）</span></div>
           <div class="setrow" style="padding:9px 0">
             <div class="l"><div class="t">覆盖高度 / 透明度（都是随机区间）</div><div class="d">从参考视频逐行实测复刻：素材等比缩放贴上/下边(不变形)，<b>透明度从边缘峰值线性渐变到0</b>(跨度=覆盖高度，无实心段)，中间完全不叠加。每条带在区间内独立随机取值 · 建议 覆盖 400~460、透明 0.6~0.8</div></div>
-            <span style="font-size:12px;color:var(--sub)">覆盖</span><input type="number" class="fdC" id="fd_band_h_lo" value="400" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
-            <span style="font-size:12px;color:var(--sub)">~</span><input type="number" class="fdC" id="fd_band_h_hi" value="460" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">覆盖</span><input type="number" class="fdC" id="fd_band_h_lo" value="310" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub)">~</span><input type="number" class="fdC" id="fd_band_h_hi" value="410" min="120" max="1200" step="10" style="width:60px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="number" class="fdC" id="fd_band_op_lo" value="0.6" min="0.1" max="1" step="0.05" style="width:60px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub)">~</span><input type="number" class="fdC" id="fd_band_op_hi" value="0.8" min="0.1" max="1" step="0.05" style="width:60px" onchange="saveFdCfg()">
           </div>
@@ -784,16 +788,16 @@
           <div style="font-size:12px;color:var(--warn);margin-bottom:8px">⚠ 只改画面②层，不碰音频③——治不了"音频判重"，只是画面层再加一道保险。透明度别超 20%（会有重影）。</div>
           <div class="setrow" style="padding:9px 0">
             <div class="l"><div class="t">启用 / B素材文件夹</div><div class="d">从这个文件夹随机抽一条B铺满全程（各变体自动挑不同B、组内不撞）</div></div>
-            <label class="switch"><input type="checkbox" class="fdC" id="fd_ab_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_ab_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_ab_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_ab_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
             <input type="hidden" class="fdC" id="fd_ab_folder">
           </div>
           <div class="setrow" style="padding:9px 0">
             <div class="l"><div class="t">B层透明度（随机区间）</div><div class="d">建议 0.08~0.14 · 越低越无感、去重略弱，越高越狠但可能有重影</div></div>
-            <input type="number" class="fdC" id="fd_ab_op_lo" value="0.08" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
+            <input type="number" class="fdC" id="fd_ab_op_lo" value="0.05" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub)">~</span>
-            <input type="number" class="fdC" id="fd_ab_op_hi" value="0.14" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
+            <input type="number" class="fdC" id="fd_ab_op_hi" value="0.09" min="0.02" max="0.30" step="0.01" style="width:70px" onchange="saveFdCfg()">
           </div>
         </div>
 
@@ -803,7 +807,7 @@
           <div style="font-size:12px;color:var(--warn);margin-bottom:8px">⚠ 只改画面②层，不碰音频③。剪映自带特效是加密素材扒不出来 → 你放<b>自己的透明特效素材</b>进文件夹（黑底粒子视频选「粒子」模式，边框/透明PNG选「边框」模式），网上搜「粒子叠加 overlay 素材」一堆。</div>
           <div class="setrow" style="padding:9px 0">
             <div class="l"><div class="t">启用 / 特效素材文件夹</div><div class="d">从这里随机抽一条特效叠上（各变体自动挑不同的、组内不撞）· 支持 mp4/mov/webm 视频 和 png 图片</div></div>
-            <label class="switch"><input type="checkbox" class="fdC" id="fd_fx_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_fx_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_fx_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_fx_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:300px">未选择</span>
             <input type="hidden" class="fdC" id="fd_fx_folder">
@@ -814,9 +818,9 @@
               <option value="screen">粒子(黑底雪花/光效)</option>
               <option value="over">边框(透明PNG/素材)</option>
             </select>
-            <input type="number" class="fdC" id="fd_fx_op_lo" value="0.7" min="0.05" max="1" step="0.05" style="width:70px;margin-left:8px" onchange="saveFdCfg()">
+            <input type="number" class="fdC" id="fd_fx_op_lo" value="0.4" min="0.05" max="1" step="0.05" style="width:70px;margin-left:8px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub)">~</span>
-            <input type="number" class="fdC" id="fd_fx_op_hi" value="0.9" min="0.05" max="1" step="0.05" style="width:70px" onchange="saveFdCfg()">
+            <input type="number" class="fdC" id="fd_fx_op_hi" value="0.6" min="0.05" max="1" step="0.05" style="width:70px" onchange="saveFdCfg()">
           </div>
         </div>
 
@@ -861,6 +865,9 @@
             <input type="number" class="fdC" id="fd_mirror" value="0" step="0.1" min="0" max="1" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">极淡噪点</div><div class="d">加一层几乎看不见的噪点，改像素</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_noise" onchange="saveFdCfg()"><span class="slider"></span></label></div>
+          <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">抽帧 <span style="color:var(--acc2);font-size:11px">帧序列扰动</span></div><div class="d">每秒随机丢 N 帧，再用相邻帧把空位补回→<b>时长不变、音画不漂</b>，只打乱平台逐帧哈希/帧序列指纹。和动态运镜有重叠、肉眼无感 · 建议 1</div></div>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_dropf_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
+            <span style="font-size:12px;color:var(--sub);margin-left:10px">每秒</span><input type="number" class="fdC" id="fd_dropf_n" value="1" min="1" max="15" step="1" style="width:64px" onchange="saveFdCfg()"> 帧</div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">元数据</div><div class="d">清空原元数据（始终开），并写入随机"拍摄时间"伪装成普通视频</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_fakemeta" checked onchange="saveFdCfg()"><span class="slider"></span></label> <span style="font-size:12px;color:var(--dim)">随机伪元数据</span></div>
         </div>
@@ -869,9 +876,9 @@
         <div class="card" style="padding:16px 18px;margin-bottom:14px">
           <div style="font-weight:800;font-size:16px;margin-bottom:4px">🔊 音频去重 <span style="color:var(--dim);font-weight:400;font-size:12px">平台查重很看声纹；变速已自动同步音频（音画不同步已修）</span></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">音调微移</div><div class="d">变调不变速，直接打碎音频指纹，人耳几乎无感 · 建议 0.97~1.03</div></div>
-            <input type="number" class="fdC" id="fd_pit_lo" value="0.97" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_pit_hi" value="1.03" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"></div>
+            <input type="number" class="fdC" id="fd_pit_lo" value="1" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_pit_hi" value="1.1" step="0.01" min="0.9" max="1.1" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">音量微调</div><div class="d">整体响度小幅随机 · 建议 0.95~1.05</div></div>
-            <input type="number" class="fdC" id="fd_avol_lo" value="0.95" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_avol_hi" value="1.05" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"></div>
+            <input type="number" class="fdC" id="fd_avol_lo" value="1.01" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_avol_hi" value="1.15" step="0.01" min="0.5" max="1.5" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">频谱EQ抖动</div><div class="d">低音/高音各随机±1.2dB，再叠一层声纹扰动</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_aeq" checked onchange="saveFdCfg()"><span class="slider"></span></label></div>
         </div>
@@ -886,17 +893,17 @@
             <input type="hidden" class="fdC" id="fd_stk_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴几张 / 大小 / 不透明度</div></div>
             <input type="number" class="fdC" id="fd_stk_count" value="4" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
-            <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="0.6" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="0.8" style="width:64px" onchange="saveFdCfg()">
-            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.02" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.03" style="width:64px" onchange="saveFdCfg()"></div>
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="1" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="2" style="width:64px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.03" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.05" style="width:64px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音 · 选好音乐文件夹才生效</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_bgm_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_bgm_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_bgm_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">BGM 音量</div><div class="d">建议 0.04~0.10</div></div>
-            <input type="number" class="fdC" id="fd_bgm_lo" value="0.04" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.10" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
+            <input type="number" class="fdC" id="fd_bgm_lo" value="0.1" step="0.01" style="width:76px" onchange="saveFdCfg()"> ~ <input type="number" class="fdC" id="fd_bgm_hi" value="0.15" step="0.01" style="width:76px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">🎬 每集后插视频</div><div class="d">每集结束都随机插一条视频（含最后一集），自动缩放 9:16、干净不去重 · 从文件夹随机选</div></div>
-            <label class="switch"><input type="checkbox" class="fdC" id="fd_tail_enable" onchange="saveFdCfg()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" class="fdC" id="fd_tail_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
             <button class="btn ghost" style="padding:8px 14px;margin-left:10px" onclick="pickFolderInto('fd_tail_folder', saveFdCfg)">📁 选择</button>
             <span id="fd_tail_folder_show" class="pathshow" style="margin-left:10px;font-size:13px;color:var(--dim);word-break:break-all;max-width:240px">未选择</span>
             <input type="hidden" class="fdC" id="fd_tail_folder"></div>
@@ -1425,6 +1432,12 @@ function applyPlatformLabels(){
   const rt=document.getElementById('relatedTab');
   if(rt) rt.style.display = PLATFORM==='tiktok' ? 'none' : '';
   if(PLATFORM==='tiktok' && discSrc==='related') switchSrc('library');
+  // TikTok 才显示「代理(挂梯子)」输入行，并载入已存代理
+  const pr=document.getElementById('tkProxyRow');
+  if(pr){ pr.style.display = PLATFORM==='tiktok' ? 'flex' : 'none'; if(PLATFORM==='tiktok') loadTkProxy(); }
+}
+async function loadTkProxy(){
+  try{ const r=await api('/api/tiktok_proxy'); const el=document.getElementById('tkProxy'); if(el) el.value=(r&&r.proxy)||''; }catch(e){}
 }
 
 function switchPlatform(p){
@@ -1966,7 +1979,7 @@ function updateFdMatCount(){
 const _FDC_IDS=['fd_per','fd_conc','fd_variants','fd_vbitrate','fd_out','fd_band_h_lo','fd_band_h_hi','fd_band_op_lo','fd_band_op_hi','fd_bT_enable','fd_bT_folder','fd_bB_enable','fd_bB_folder',
   'fd_spd_lo','fd_spd_hi','fd_bri_lo','fd_bri_hi','fd_con_lo','fd_con_hi','fd_sat_lo','fd_sat_hi','fd_shp_lo','fd_shp_hi','fd_hue_lo','fd_hue_hi','fd_gam_lo','fd_gam_hi',
   'fd_zoom_lo','fd_zoom_hi','fd_rot_lo','fd_rot_hi','fd_lens_lo','fd_lens_hi','fd_vig_enable','fd_vig_lo','fd_vig_hi','fd_motion_enable','fd_motion_amp','fd_head_lo','fd_head_hi','fd_tail_lo','fd_tail_hi',
-  'fd_mirror','fd_noise','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
+  'fd_mirror','fd_noise','fd_dropf_enable','fd_dropf_n','fd_fakemeta','fd_pit_lo','fd_pit_hi','fd_avol_lo','fd_avol_hi','fd_aeq',
   'fd_stk_enable','fd_stk_folder','fd_stk_count','fd_stk_sc_lo','fd_stk_sc_hi','fd_stk_al_lo','fd_stk_al_hi',
   'fd_bgm_enable','fd_bgm_folder','fd_bgm_lo','fd_bgm_hi','fd_tail_enable','fd_tail_folder',
   'fd_ab_enable','fd_ab_folder','fd_ab_op_lo','fd_ab_op_hi',
@@ -2010,6 +2023,7 @@ function buildFdCfg(){
     audio:{ pitch:[n('fd_pit_lo',0.97),n('fd_pit_hi',1.03)], volume:[n('fd_avol_lo',0.95),n('fd_avol_hi',1.05)], eq:on('fd_aeq') },
     fake_meta:on('fd_fakemeta'),
     mirror_prob:n('fd_mirror',0), noise:on('fd_noise'),
+    dropframe:{ enable:on('fd_dropf_enable'), per_sec:n('fd_dropf_n',1) },
     stickers:{ enable:on('fd_stk_enable'), folder:f('fd_stk_folder'), count:n('fd_stk_count',4),
       scale:[n('fd_stk_sc_lo',0.6),n('fd_stk_sc_hi',0.8)], alpha:[n('fd_stk_al_lo',0.02),n('fd_stk_al_hi',0.03)] },
     bgm:{ enable:on('fd_bgm_enable'), folder:f('fd_bgm_folder'), volume:[n('fd_bgm_lo',0.04),n('fd_bgm_hi',0.1)] },
@@ -3011,6 +3025,7 @@ async function _fetchDramasFromWebview(aid){
   }catch(e){}
   return null;
 }
+
 async function openDramaPicker(){
   let list=window._chDramas||[];
   if(!list.length){
@@ -3225,6 +3240,10 @@ async function openAcctBackend(aid, name){
   const emp=document.getElementById('chAcctBackendEmpty'); if(emp) emp.style.display='none';
   if(!backendTabs.find(t=>t.aid===aid)){
     const part='persist:ch_'+aid;   // 每个号独立持久会话；在这里扫一次码，扫完点「同步登录到发布」
+    // 【关键·登录同步】开后台前，先把已保存的登录态(state file 的 cookie)灌进这个号的分区——
+    // 发布(publish.js)一直是每次发布前这么注入的，后台 webview 以前漏了这步，导致分区 cookie 过期后
+    // 「发布能用(它注入了)、后台却弹二维码(没注入)」。补上后三处一致。新号/无存档时注入失败(无害,照样出码扫)。
+    if(window.electronAPI&&electronAPI.injectCookies){ try{ await electronAPI.injectCookies(aid); }catch(e){} }
     backendTabs.push({aid, name, part});
     const wv=document.createElement('webview');
     wv.id='wv_'+aid;
@@ -3240,8 +3259,21 @@ async function openAcctBackend(aid, name){
     wv.addEventListener('did-navigate', e=>_onBackendNav(aid, e&&e.url));
     wv.addEventListener('did-navigate-in-page', e=>_onBackendNav(aid, e&&e.url));
     document.getElementById('chAcctBackendBody').appendChild(wv);
+    // 判定真实登录态并回写:开后台10秒内没进到 /platform(=停在扫码/登录页=会话已失效)→标离线,
+    // 纠正被动式"假在线"(会话悄悄过期但没触发失败标记),让左边列表/一键发布/后台三处同步真相。
+    // 进了 /platform 的由 _autoSyncBackend 标在线,不受影响。
+    setTimeout(()=>_verifyBackendLive(aid), 10000);
   }
   showBackendTab(aid);
+}
+async function _verifyBackendLive(aid){
+  const w=document.getElementById('wv_'+aid); if(!w) return;               // 标签已关
+  let url=''; try{ url=(typeof w.getURL==='function')?w.getURL():(w.src||''); }catch(e){}
+  if(url.indexOf('channels.weixin.qq.com')<0) return;                       // 还没进微信域/仍在加载,不误判
+  if(url.indexOf('/platform')>=0) return;                                   // 已进后台=登录有效
+  // 在微信域却没进 /platform = 停在二维码/登录页 = 会话失效 → 标离线并刷新列表
+  try{ await api('/api/channels/account/'+aid+'/mark_session','POST',{online:false}); }catch(e){}
+  refreshChannels();
 }
 let _bkSynced={};
 function _onBackendNav(aid, url){
@@ -4291,14 +4323,36 @@ function hideUpdateMask(){ const m=document.getElementById('updMask'); if(m) m.s
 
 /* ---- 登录（按当前平台）---- */
 async function loginQR(btn){
+  const old=btn.textContent;
+  // Electron 打包版：开原生登录窗口（抖音/TikTok 都走这条），扫码/账号登录，读到 sessionid 自动同步
+  if(window.electronAPI&&electronAPI.platformLogin){
+    btn.disabled=true; btn.textContent='请在弹出窗口登录…';
+    try{
+      const proxy=(PLATFORM==='tiktok')?((document.getElementById('tkProxy')||{}).value||'').trim():'';
+      const r=await electronAPI.platformLogin(PLATFORM, proxy);
+      if(r&&r.ok&&r.cookie){
+        await api('/api/set_cookie','POST',{cookie:r.cookie,platform:PLATFORM});
+        if(PLATFORM==='tiktok'){ try{ await api('/api/tiktok_proxy','POST',{proxy}); }catch(_){} }
+        toast('登录成功！现在可以拉更多作品了'); refresh();
+      }else if(r&&r.cancelled){ /* 用户自己关了窗口，不打扰 */ }
+      else uiAlert((r&&r.error)||'登录未完成');
+    }catch(e){ uiAlert('登录失败：'+(e.message||e)); }
+    btn.disabled=false; btn.textContent=old; return;
+  }
+  // 老 pywebview 桌面版
   if(window.pywebview&&window.pywebview.api&&window.pywebview.api.login_qr){
-    const old=btn.textContent; btn.disabled=true; btn.textContent='请在弹出窗口里扫码…';
+    btn.disabled=true; btn.textContent='请在弹出窗口里扫码…';
     try{ const r=await window.pywebview.api.login_qr(PLATFORM);
       if(r&&r.ok){ toast('登录成功！现在可以拉更多作品了'); refresh(); }
       else uiAlert(r&&r.error||'登录未完成'); }
     catch(e){ uiAlert('登录失败：'+e); }
-    btn.disabled=false; btn.textContent=old;
-  }else{ uiAlert('扫码登录需在桌面软件里用。或改用「粘贴 Cookie」/「从浏览器导入」。'); }
+    btn.disabled=false; btn.textContent=old; return;
+  }
+  uiAlert('扫码登录需在桌面软件里用。或改用「粘贴 Cookie」/「从浏览器导入」。');
+}
+async function saveTkProxy(){
+  const v=((document.getElementById('tkProxy')||{}).value||'').trim();
+  try{ await api('/api/tiktok_proxy','POST',{proxy:v}); toast(v?'已设置代理':'已清空代理'); }catch(e){ uiAlert(e.message||'保存失败'); }
 }
 async function loginBrowser(btn){
   const old=btn.textContent; btn.disabled=true; btn.textContent='读取中…';

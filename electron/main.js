@@ -9,6 +9,11 @@ const https = require('https');
 const os = require('os');
 const { publishOne, electronLogin, electronCheckLogin, captureFlow, dumpUploadSdk, dumpAuthMat } = require('./publish');
 
+// 【防白屏·根治】关掉 Windows 原生「窗口遮挡检测」：系统误判主窗口被遮挡(反复重启/切窗口/多显示器时易发)
+// 会让渲染进程暂停绘制 → 进程活着、页面也加载了(内存占着)、但窗口一片空白，刷新/改大小都不回来。
+// 关掉它后窗口始终正常绘制。这不是 GPU 开关(不碰硬件加速,和"打包防黑屏"那条无关)，安全。
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
 const ROOT = path.join(__dirname, '..');   // 项目根（app.py 所在）
 // 数据目录：打包版=%LOCALAPPDATA%\爆款监控\data(和 app.py 一致);开发态=项目 data/。
 // 之前用 ROOT/data 找账号 cookie,打包机上找不到→发布报"账号未登录"。
@@ -313,6 +318,62 @@ ipcMain.handle('get-partition-cookies', async (_e, aid) => {
 ipcMain.on('dbg', (_e, msg) => {
   console.log('[DBG]', msg);
   try { fs.appendFileSync(path.join(__dirname, 'dbg.log'), '[DBG] ' + msg + '\n'); } catch (e) {}
+});
+
+// ============ 抖音/TikTok 登录：开一个真登录窗口（走系统代理，可选自定义代理=挂 VPN），
+// 用户手机扫码或账号登录，后台每 1.5s 轮询会话 cookie，读到 sessionid 就把整段 cookie 回传前端。
+// 这就是把 pywebview 版的 login_qr 搬到 Electron——之前 Electron 版扫码登录是死的（只有视频号有内嵌登录）。============
+const _PLATFORM_LOGIN = {
+  douyin: { url: 'https://www.douyin.com/', title: '登录抖音 · 手机扫码或账号登录', cookieUrl: 'https://www.douyin.com/' },
+  tiktok: { url: 'https://www.tiktok.com/login', title: 'Login TikTok · 需已连 VPN，扫码或账号登录', cookieUrl: 'https://www.tiktok.com/' },
+};
+ipcMain.handle('platform-login', async (_e, arg) => {
+  const platform = (arg && arg.platform) || (typeof arg === 'string' ? arg : 'douyin');
+  const proxy = (arg && arg.proxy || '').trim();
+  const conf = _PLATFORM_LOGIN[platform] || _PLATFORM_LOGIN.douyin;
+  const part = 'persist:login_' + platform;       // 持久分区：登录态留着，下次开窗口一般已登录
+  const ses = session.fromPartition(part);
+  try {
+    // 填了代理就用它（Clash 系统代理模式 VPN 走这条）；留空 → Electron 默认吃 Windows 系统代理（TUN 模式也通）
+    if (proxy) await ses.setProxy({ proxyRules: proxy });
+    else await ses.setProxy({ mode: 'system' });
+  } catch (e) {}
+  let lw;
+  try {
+    lw = new BrowserWindow({
+      width: 1060, height: 780, title: conf.title, autoHideMenuBar: true,
+      backgroundColor: '#ffffff',
+      webPreferences: { partition: part, nodeIntegration: false, contextIsolation: true },
+    });
+    lw.setMenuBarVisibility(false);
+    lw.loadURL(conf.url);
+  } catch (e) {
+    return { ok: false, error: '打开登录窗口失败：' + String(e).slice(0, 120) };
+  }
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => {
+      if (done) return; done = true;
+      try { clearInterval(timer); } catch (e) {}
+      try { clearTimeout(tmo); } catch (e) {}
+      try { lw.removeAllListeners('closed'); } catch (e) {}
+      try { if (!lw.isDestroyed()) lw.destroy(); } catch (e) {}
+      resolve(r);
+    };
+    const timer = setInterval(async () => {
+      try {
+        const cks = await ses.cookies.get({ url: conf.cookieUrl });
+        const jar = {};
+        for (const c of cks) jar[c.name] = c.value;
+        if (jar.sessionid) {
+          const cookieStr = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
+          finish({ ok: true, cookie: cookieStr });
+        }
+      } catch (e) {}
+    }, 1500);
+    lw.on('closed', () => finish({ ok: false, cancelled: true, error: '窗口被关闭（还没登录成功）' }));
+    const tmo = setTimeout(() => finish({ ok: false, error: '5 分钟内没检测到登录（没扫码/没登录成功）' }), 300000);
+  });
 });
 
 // ============ 自动更新（安装版）：每次启动检测 version.json，有新版→下载安装包→运行→退出自己 ============

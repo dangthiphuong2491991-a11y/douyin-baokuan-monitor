@@ -38,6 +38,10 @@ def _collect_chromium():
             rev_dir = _os.path.dirname(rev_dir)
         rev_name = _os.path.basename(rev_dir)
         for root, _dirs, files in _os.walk(rev_dir):
+            # 剔除运行时污染：视频号 Playwright 曾把账号档案写进 Chromium 安装目录
+            # (chrome-win64\data\channels\profiles\<aid>\…)。这些既是隐私(账号 cookie 绝不能进分发包)、
+            # 又常被占用导致 PermissionError 打包中断。标准 Chromium 没有 data 目录，直接整枝剪掉。
+            _dirs[:] = [d for d in _dirs if d.lower() != 'data']
             for f in files:
                 full = _os.path.join(root, f)
                 rel = _os.path.relpath(full, rev_dir)

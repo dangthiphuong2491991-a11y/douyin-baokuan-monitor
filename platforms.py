@@ -39,6 +39,16 @@ except Exception:
 _TT = {}
 
 
+# TikTok 代理：Clash「系统代理」模式的 VPN 要显式填代理（如 http://127.0.0.1:7890），
+# httpx 才会走梯子；TUN 模式留空即可（系统层已全局转发）。由 app.py 从 config 灌进来。
+TIKTOK_PROXY = ""
+
+
+def set_tiktok_proxy(p: str):
+    global TIKTOK_PROXY
+    TIKTOK_PROXY = (p or "").strip()
+
+
 def _tt():
     """懒加载 TikTok 模块（需能访问 tiktok.com，即挂着 VPN）。返回 dict 或抛异常。"""
     if _TT:
@@ -263,9 +273,10 @@ class TiktokAdapter(BaseAdapter):
             ck = f"ttwid={Token.gen_ttwid()};"
             if mst:
                 ck += f" msToken={mst};"
-        # 走系统全局 VPN：不单独设代理，用系统网络
+        # 代理：填了就走它（Clash 系统代理模式）；留空 → None=直连（TUN 模式靠系统层转发）
+        prx = TIKTOK_PROXY or None
         return {"headers": {"User-Agent": UA, "Referer": "https://www.tiktok.com/"},
-                "cookie": ck, "proxies": {"http://": None, "https://": None},
+                "cookie": ck, "proxies": {"http://": prx, "https://": prx},
                 "mode": "post", "timeout": 30}
 
     def handler(self, cookie: str = ""):

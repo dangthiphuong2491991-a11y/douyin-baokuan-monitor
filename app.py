@@ -130,6 +130,11 @@ def _save(path: Path, obj):
 
 
 config = _load(CONFIG_FILE, {"interval_minutes": 5, "bloggers": []})
+# TikTok 代理（挂梯子）：启动时从配置灌进 platforms，让 f2 抓取走同一个代理
+try:
+    platforms.set_tiktok_proxy(config.get("tiktok_proxy", ""))
+except Exception:
+    pass
 # 迁移善后：老用户若用的是【默认下载目录(exe 旁边的 downloads)】，迁数据后把 download_dir
 # 接到老位置，避免"下载库突然空了"（大文件不搬、只把路径接过去；只做一次）。
 if getattr(sys, "frozen", False) and not (config.get("download_dir") or "").strip():
@@ -1698,6 +1703,27 @@ def api_logout(platform: str = "douyin"):
     return {"ok": True, "logged_in": False}
 
 
+class ProxyBody(BaseModel):
+    proxy: str = ""
+
+
+@app.get("/api/tiktok_proxy")
+def api_get_tiktok_proxy():
+    return {"proxy": (config.get("tiktok_proxy") or "")}
+
+
+@app.post("/api/tiktok_proxy")
+def api_set_tiktok_proxy(body: ProxyBody):
+    p = (body.proxy or "").strip()
+    config["tiktok_proxy"] = p
+    _save(CONFIG_FILE, config)
+    try:
+        platforms.set_tiktok_proxy(p)
+    except Exception:
+        pass
+    return {"ok": True, "proxy": p}
+
+
 @app.post("/api/login_qr")
 def api_login_qr(platform: str = "douyin"):
     """触发桌面端弹出登录窗口扫码（由 desktop.py 注入的回调实现）"""
@@ -1932,6 +1958,21 @@ async def api_ch_check_login(aid: str):
     except Exception as e:
         return {"ok": True, "valid": False, "error": str(e)[:120]}
     return {"ok": True, "valid": bool(valid)}
+
+
+class MarkSessionBody(BaseModel):
+    online: bool = False
+
+
+@app.post("/api/channels/account/{aid}/mark_session")
+def api_ch_mark_session(aid: str, body: MarkSessionBody):
+    """前端后台 webview 看到的真实登录态回报这里：进到 /platform=活、停在二维码页=死。
+    以此纠正被动式 ch_online 的"假在线"（会话悄悄失效但没有任何操作失败去标记它），
+    让「账号列表在线状态 / 一键发布可用性 / 后台 webview」三处对齐真相。"""
+    if not _ch_account(aid):
+        return JSONResponse({"error": "账号不存在"}, status_code=404)
+    _mark_session(aid, bool(body.online))
+    return {"ok": True, "online": ch_online(aid)}
 
 
 @app.post("/api/channels/account/{aid}/save_state")

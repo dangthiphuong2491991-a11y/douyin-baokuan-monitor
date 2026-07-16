@@ -331,7 +331,17 @@ def dedup_render(main_paths, cfg, out_path, on_status=None, params_out=None, var
         Hm = (int(H * (1 + amp)) // 2) * 2
         vf += (f",scale={Wm}:{Hm},crop={W}:{H}:"
                f"x=(iw-ow)*(0.5+0.5*sin(t*0.10)):y=(ih-oh)*(0.5+0.5*sin(t*0.13))")
-    vf += f",setpts=PTS/{spd},fps=30,setsar=1,format=yuv420p"   # 强制方形像素:防广角/旋转/运镜留下歪SAR导致播放器把画面压成窄条
+    vf += f",setpts=PTS/{spd},fps=30"
+    # 抽帧:先固定成 30fps,再每秒随机丢 N 帧,紧接第二个 fps=30 用相邻帧把空位补回——
+    # 总时长/帧率都不变(音画不漂),只把"每秒某一帧"换成邻帧的重复,打乱平台的逐帧哈希与帧序列指纹。
+    # 与动态运镜冗余(运镜已逐帧改裁切),多一层帧序列扰动、肉眼无感。相位 off 每条随机→各成品丢的位置不同。
+    _df = cfg.get("dropframe") or {}
+    if _df.get("enable"):
+        _dn = max(1, min(15, int(round(_rr(_df.get("per_sec"), 1.0) or 1))))   # 每秒抽帧数,默认1
+        _period = max(2, round(30 / _dn))
+        _off = random.randint(0, _period - 1)
+        vf += f",select=not(eq(mod(n+{_off}\\,{_period})\\,0)),fps=30"          # 逗号在表达式里要转义(\\,)
+    vf += ",setsar=1,format=yuv420p"   # 强制方形像素:防广角/旋转/运镜留下歪SAR导致播放器把画面压成窄条
     fc.append(f"{vsrc}{vf}[m]")
     cur = "[m]"
 

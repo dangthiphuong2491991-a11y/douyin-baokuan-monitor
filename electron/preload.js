@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickVideoDir: (defaultPath) => ipcRenderer.invoke('pick-video-dir', defaultPath),
   clearPartition: (aid) => ipcRenderer.invoke('clear-partition', aid),
   getPartitionCookies: (aid) => ipcRenderer.invoke('get-partition-cookies', aid),
+  platformLogin: (platform, proxy) => ipcRenderer.invoke('platform-login', { platform, proxy }),
   dbg: (msg) => ipcRenderer.send('dbg', msg),
 });
