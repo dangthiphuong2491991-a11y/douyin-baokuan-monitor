@@ -123,11 +123,24 @@ async function checkAndApply(opts) {
 
   const manifestUrl = versionInfo.update_manifest_url;
   const poolBase = versionInfo.update_pool_base;
-  const installed = loadInstalled();
-  // 没有基线清单(老版本首次装、或从整包版过渡) / 没配差量源 → 只能整包
-  if (!manifestUrl || !poolBase || !installed) {
-    log('无差量基线/源 → 整包 (manifest=' + !!manifestUrl + ' pool=' + !!poolBase + ' installed=' + !!installed + ')');
-    return onFullInstaller('no-baseline');
+  let installed = loadInstalled();
+  // 没配差量源 → 只能整包
+  if (!manifestUrl || !poolBase) {
+    log('无差量源 → 整包 (manifest=' + !!manifestUrl + ' pool=' + !!poolBase + ')');
+    return onFullInstaller('no-source');
+  }
+  // 【增量更新根治】本地没有基线清单 installed_manifest.json 时(老版 Setup 没把它打进包 → 装完就没有,
+  // 是"增量一直不生效、老是拉整包"的真凶),别急着整包：按当前版本号去线上取"对应版本的 update_manifest.json"
+  // 当基线，一样能算差量。各版本 Release 都传了 update_manifest.json，拿来当基线即可。
+  if (!installed) {
+    const baseUrl = manifestUrl.replace('/v' + latest + '/', '/v' + curVersion + '/');
+    try {
+      installed = JSON.parse(await httpGetText(baseUrl));
+      log('本地无基线 → 用线上 v' + curVersion + ' 清单当基线: ' + baseUrl);
+    } catch (e) {
+      log('线上基线也取不到(v' + curVersion + ') → 整包: ' + e);
+      return onFullInstaller('no-baseline');
+    }
   }
 
   let manifest;
