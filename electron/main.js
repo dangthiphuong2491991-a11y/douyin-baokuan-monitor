@@ -435,19 +435,26 @@ async function checkUpdateOnStartup() {
   const latest = info.desktop_version || info.version;
   if (!_verGt(latest, cur)) { console.log('[upd] 已是最新', cur, 'vs', latest); return; }
 
-  // 整包安装(差量不满足/失败时回退):弹框征询→下整包→静默重装
+  // 【先问再更】不管走增量还是整包，先弹卡片让用户看清"版本号 + 更新了啥"，点"现在更新"才动手；
+  // 点"稍后"就这次不更、下次开软件再提醒。不再像以前那样开软件闷头自动下载重启。
+  const ask = await dialog.showMessageBox(win, {
+    type: 'info', buttons: ['现在更新', '稍后'], defaultId: 0, cancelId: 1,
+    title: '发现新版本 v' + latest,
+    message: `发现新版本 v${latest}（当前 v${cur}）`,
+    detail: (info.desktop_notes || info.notes || '') + '\n\n点“现在更新”自动下载并更新（数据/登录/设置/下载都保留）；点“稍后”下次开软件再提醒。',
+  });
+  if (ask.response !== 0) { console.log('[upd] 用户选择稍后更新'); return; }
+
+  // 整包安装(差量不满足/失败时回退):前面已问过 → 这里直接下整包，不再重复弹窗
   const onFullInstaller = async (reason) => {
     console.log('[upd] 整包安装, 原因:', reason);
     const setupUrl = info.desktop_setup_url || info.setup_url;
     if (!setupUrl) return { mode: 'full-skip' };
-    const r = await dialog.showMessageBox(win, {
-      type: 'info', buttons: ['现在更新', '以后再说'], defaultId: 0, cancelId: 1,
-      title: '发现新版本', message: `发现新版本 v${latest}（当前 v${cur}）`,
-      detail: (info.desktop_notes || info.notes || '') + '\n\n点“现在更新”会下载安装包并自动重装，你的下载视频/设置/登录都不受影响。',
-    });
-    if (r.response !== 0) return { mode: 'full-cancel' };
     try { await downloadAndRunInstaller(setupUrl, latest); }
-    catch (e) { dialog.showMessageBox(win, { type: 'error', title: '更新失败', message: '自动更新失败', detail: String(e).slice(0, 200) + '\n\n可稍后重启再试，或到发布页手动下载安装。' }); }
+    catch (e) {
+      if (String(e).includes('__CANCELLED__')) { console.log('[upd] 用户取消整包下载'); return { mode: 'full-cancel' }; }
+      dialog.showMessageBox(win, { type: 'error', title: '更新失败', message: '自动更新失败', detail: String(e).slice(0, 200) + '\n\n可稍后重启再试，或到发布页手动下载安装。' });
+    }
     return { mode: 'full' };
   };
 
@@ -475,44 +482,57 @@ function downloadAndRunInstaller(url, ver) {
   return new Promise((resolve, reject) => {
     const dest = path.join(os.tmpdir(), `爆款监控_Setup_${ver}.exe`);
     const pw = new BrowserWindow({
-      width: 460, height: 200, frame: false, resizable: false, alwaysOnTop: true,
+      width: 460, height: 210, frame: false, resizable: false, alwaysOnTop: true,
       backgroundColor: '#12141c', webPreferences: {},
     });
+    // 右上角 ✕ = 取消下载（点了 window.close → 触发 pw 的 closed）
     pw.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
-      `<body style="margin:0;background:#12141c;color:#fff;font:14px system-ui;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px">
+      `<body style="margin:0;background:#12141c;color:#fff;font:14px system-ui;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px;position:relative">
+      <div onclick="window.close()" title="取消更新" style="position:absolute;top:8px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;color:#888;font-size:16px" onmouseover="this.style.background='#333';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='#888'">✕</div>
       <div id="t">正在下载新版 v${ver} …</div>
       <div style="width:82%;height:12px;background:#333;border-radius:6px;overflow:hidden"><div id="b" style="height:100%;width:0;background:linear-gradient(90deg,#7c6eff,#a78bfa);transition:width .2s"></div></div>
       <div id="p" style="font-size:12px;color:#aaa">0%</div>
       <script>function set(pct,txt){document.getElementById('b').style.width=pct+'%';document.getElementById('p').textContent=txt}</script></body>`));
     const setP = (pct, txt) => { try { pw.webContents.executeJavaScript(`set(${pct},${JSON.stringify(txt)})`); } catch (e) {} };
-    const fail = (e) => { try { pw.destroy(); } catch (_) {} reject(e instanceof Error ? e : new Error(String(e))); };
+    let done = false, curReq = null, fstream = null;
+    const fin = (fn, arg) => { if (done) return; done = true; try { pw.removeAllListeners('closed'); pw.destroy(); } catch (_) {} fn(arg); };
+    const fail = (e) => fin(reject, e instanceof Error ? e : new Error(String(e)));
+    pw.on('closed', () => {                                  // 用户点 ✕ → 取消:掐断下载、删半成品、按取消 reject
+      try { if (curReq) curReq.destroy(); } catch (_) {}
+      try { if (fstream) fstream.destroy(); } catch (_) {}
+      try { if (fs.existsSync(dest)) fs.unlinkSync(dest); } catch (_) {}
+      if (!done) { done = true; reject(new Error('__CANCELLED__')); }
+    });
 
     const doGet = (u, redirects) => {
       if (redirects > 6) return fail(new Error('too many redirects'));
       const lib = u.startsWith('https') ? https : http;
-      lib.get(u, { headers: { 'User-Agent': 'baokuan-updater' } }, (res) => {
+      curReq = lib.get(u, { headers: { 'User-Agent': 'baokuan-updater' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume(); return doGet(new URL(res.headers.location, u).toString(), redirects + 1);
         }
         if (res.statusCode !== 200) { res.resume(); return fail(new Error('HTTP ' + res.statusCode)); }
         const total = parseInt(res.headers['content-length'] || '0', 10);
         let got = 0;
-        const f = fs.createWriteStream(dest);
+        const f = fs.createWriteStream(dest); fstream = f;
         res.on('data', (d) => {
           got += d.length;
           if (total) setP(Math.floor(got / total * 100), `${(got / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`);
         });
         res.pipe(f);
         f.on('finish', () => f.close(() => {
+          if (done) return;                                 // 已取消/已结束
           try { if (fs.statSync(dest).size < 1000000) return fail(new Error('下载文件异常(过小)，可能网络中断')); } catch (e) { return fail(e); }
           setP(100, '下载完成，正在静默安装并重启…');
           // 更新场景用静默安装 /S（不再弹向导、装到原位置），--force-run 装完自动重启。
           // 首次安装是用户手动双击 setup（那时才走选位置的向导）。
           try { spawn(dest, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { return fail(e); }
-          setTimeout(() => { try { pw.destroy(); } catch (_) {} resolve(); app.quit(); }, 1500);
+          done = true;                                      // 已启动安装,别再被 closed 当取消
+          setTimeout(() => { try { pw.removeAllListeners('closed'); pw.destroy(); } catch (_) {} resolve(); app.quit(); }, 1500);
         }));
         f.on('error', fail);
-      }).on('error', fail);
+      });
+      curReq.on('error', (e) => { if (!done) fail(e); });
     };
     doGet(url, 0);
   });

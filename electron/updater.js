@@ -104,7 +104,8 @@ function makeProgressWin() {
     backgroundColor: '#12141c', skipTaskbar: true, webPreferences: {},
   });
   pw.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
-    `<body style="margin:0;background:#12141c;color:#fff;font:14px system-ui;display:flex;flex-direction:column;justify-content:center;height:100vh;padding:0 26px;box-sizing:border-box;gap:12px">
+    `<body style="margin:0;background:#12141c;color:#fff;font:14px system-ui;display:flex;flex-direction:column;justify-content:center;height:100vh;padding:0 26px;box-sizing:border-box;gap:12px;position:relative">
+    <div onclick="window.close()" title="取消更新" style="position:absolute;top:8px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;color:#888;font-size:16px" onmouseover="this.style.background='#333';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='#888'">✕</div>
     <div style="font-size:16px;font-weight:600">📦 爆款监控更新</div>
     <div id="t" style="font-size:12px;color:#7c8cff">准备中…</div>
     <div id="f" style="font-size:12px;color:#aaa">下载中…</div>
@@ -175,7 +176,9 @@ async function checkAndApply(opts) {
   log(`差量: ${changed.length} 个后端文件 / ${backendMB}MB${shellChanged ? ' + 壳(app.asar)' : ''} → 开始下载`);
 
   const pw = makeProgressWin();
-  const setP = (t, f, pct) => { try { pw.webContents.executeJavaScript(`set(${JSON.stringify(t)},${JSON.stringify(f)},${pct == null ? null : pct})`); } catch (e) {} };
+  let cancelled = false;
+  pw.on('closed', () => { cancelled = true; });   // 用户点 ✕ 关窗 → 取消(仅在下载阶段生效,替换文件阶段不再理会)
+  const setP = (t, f, pct) => { try { if (!pw.isDestroyed()) pw.webContents.executeJavaScript(`set(${JSON.stringify(t)},${JSON.stringify(f)},${pct == null ? null : pct})`); } catch (e) {} };
   const os = require('os');
   const staging = path.join(os.tmpdir(), 'baokuan_update_' + latest);
   try { fs.mkdirSync(staging, { recursive: true }); } catch (e) {}
@@ -186,6 +189,7 @@ async function checkAndApply(opts) {
     const blobs = [...new Set(changed.map((c) => c.sha))];
     if (shellChanged) { blobs.push(manifest.shell_hash); relOf[manifest.shell_hash] = 'app.asar (程序外壳)'; }
     for (let i = 0; i < blobs.length; i++) {
+      if (cancelled) throw new Error('__CANCELLED__');
       const sha = blobs[i];
       const dst = path.join(staging, sha);
       setP(`下载新版 v${latest}  (${i + 1}/${blobs.length} 个文件)`, relOf[sha], Math.floor(i / blobs.length * 100));
@@ -195,8 +199,9 @@ async function checkAndApply(opts) {
       if (sha256File(dst) !== sha) throw new Error('校验失败(sha不符): ' + relOf[sha]);
     }
 
-    // 应用：停后端 → 就地替换后端文件
-    setP('正在替换文件…', '请稍候', 100);
+    // 应用：停后端 → 就地替换后端文件。过了这一行就是"提交阶段",不再理会取消(半替换更危险)。
+    if (cancelled) throw new Error('__CANCELLED__');
+    setP('正在替换文件…（请勿关闭）', '请稍候', 100);
     await stopBackend();
     for (const c of changed) {
       const target = path.join(backendDir(), c.rel);
@@ -229,8 +234,10 @@ async function checkAndApply(opts) {
     log(`差量更新完成 → v${latest} (${changed.length} 个文件)`);
     return { mode: 'diff', files: changed.length, version: latest };
   } catch (e) {
+    try { pw.removeAllListeners('closed'); if (!pw.isDestroyed()) pw.destroy(); } catch (_) {}
+    // 用户取消:只在下载阶段允许，此时后端从没停过、一个文件都没换 → 干净退出，别回退整包
+    if (String(e).includes('__CANCELLED__')) { log('用户取消更新(下载阶段,未改动任何文件)'); return { mode: 'cancelled' }; }
     log('差量过程出错 → 回退整包: ' + e);
-    try { pw.destroy(); } catch (_) {}
     // 尽量把后端拉起来(万一停了没起)
     try { await startBackend(); } catch (_) {}
     return onFullInstaller('diff-failed:' + String(e).slice(0, 60));
