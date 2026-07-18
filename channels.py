@@ -62,8 +62,8 @@ def _screen_size():
 
 
 def _hide_window_taskbar(pid: int):
-    """把该进程的可见窗口从任务栏隐藏(WS_EX_TOOLWINDOW),用户不会在任务栏看到发布浏览器。
-    窗口本身仍在屏幕右下角露1px(保持'可见'不被节流)。"""
+    """把该进程的发布浏览器窗口彻底藏起来:①从任务栏隐藏(WS_EX_TOOLWINDOW)②再移到屏幕外(-2400,0)。
+    因为启动参数已关掉遮挡/后台节流(CalculateNativeWinOcclusion 等),移到屏幕外也照常渲染、上传不慢。"""
     if sys.platform != "win32":
         return 0
     try:
@@ -72,6 +72,9 @@ def _hide_window_taskbar(pid: int):
         u = ctypes.windll.user32
         GWL_EXSTYLE = -20
         WS_EX_TOOLWINDOW = 0x00000080
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
         hwnds = []
 
         @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
@@ -84,7 +87,9 @@ def _hide_window_taskbar(pid: int):
         u.EnumWindows(_cb, 0)
         for hwnd in hwnds:
             ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            u.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW)
+            u.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW)   # 不上任务栏
+            # 再挪到屏幕外(-2400,0),彻底看不见。普通负坐标,不是 -32000 最小化哨兵→照常渲染不节流。
+            u.SetWindowPos(hwnd, 0, -2400, 0, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
         return len(hwnds)
     except Exception:
         return 0
@@ -198,8 +203,11 @@ async def _launch_persistent(p, state_file: Path, visible: bool = False):
         if visible:
             posarg = "--window-position=120,60"
         else:
-            _sw, _sh = _screen_size()
-            posarg = f"--window-position={_sw - 1},{_sh - 1}"
+            # 后台:直接开到屏幕外(彻底看不见,不再露1px)。以前怕"离屏被节流→上传慢"才贴角露1px,
+            # 但现在启动参数已把遮挡/后台节流全关掉(见下方 args 的 CalculateNativeWinOcclusion 等),
+            # 离屏窗口照常渲染、不节流(和 Electron show:false 上传照样快同理)。
+            # 用 -2400(普通负坐标),不用 -32000(那是"最小化哨兵",最小化才真不渲染→会慢)。
+            posarg = "--window-position=-2400,0"
         browser = None
         last_err = None
         for _try in range(3):     # 启动重试:机器有负载时端口可能起得慢/撞,换端口重来
@@ -895,9 +903,10 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
                  statement: str = "", location: str = "", collection: str = "",
                  drama: str = "", drama_title: str = "", activity: str = "",
                  headless: bool = False, show_browser: bool = False,
-                 on_status=None, err_dir: Path = None):
+                 on_status=None, err_dir: Path = None, draft: bool = False):
     """上传一条视频到视频号。schedule=datetime|None。返回 (ok:bool, msg:str)。
-    show_browser=True：调试用，浏览器摆屏幕上让用户看全过程；False：离屏后台(用户看不到)。"""
+    show_browser=True：调试用，浏览器摆屏幕上让用户看全过程；False：离屏后台(用户看不到)。
+    draft=True：填好表单后点「保存草稿」而不是「发表」(测试用,不真发出去、不碰账号内容)。"""
     from playwright.async_api import async_playwright
     tags = tags or []
 
@@ -1087,6 +1096,25 @@ async def upload(state_file: Path, video_path: str, title: str = "", tags=None, 
             if blk:
                 await browser.close()
                 return False, blk
+
+            if draft:
+                # 【测试用】视频到这已上传完(前面等过 clip_ready)。点「保存草稿」而不是「发表」=不真发出去。
+                st("保存草稿(测试·不发表)")
+                await _close_drama_modal(page)
+                saved = False
+                try:
+                    loc = page.get_by_role("button", name="保存草稿", exact=True)
+                    if not await loc.count():
+                        loc = page.locator("button:has-text('保存草稿')")
+                    if await loc.count():
+                        await loc.first.click(timeout=8000)
+                        saved = True
+                        await asyncio.sleep(2.5)
+                except Exception as e:
+                    await browser.close()
+                    return False, "点保存草稿失败:" + str(e)[:80]
+                await browser.close()
+                return (saved, "已保存草稿(测试·未发表)" if saved else "没找到保存草稿按钮")
 
             st("发表")
             # 【仿小V猫·可靠信号】点发表按钮触发页面发 post_create，用 post_create 的**响应**判成败

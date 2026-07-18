@@ -3,9 +3,7 @@
   "notes": "📥 更新时有【下载进度条】了——显示已下载 MB / 百分比，不再干转圈让人以为卡死；下载失败也会明确提示。🧹 修复【更新后目录里留着两个安装包】——新版启动后台反复重试，等旧程序一退出就把旧包清掉。🔧 数据搬到系统固定目录 %LOCALAPPDATA%\\爆款监控\\（自动迁移、视频号登录和账号档案一点不丢），为下一版「客户端也能内嵌视频号后台」做准备。🚀 含上一版全部：拉剧集/发布卡死根治、窄条视频根治(setsar)、素材来源只扫下载文件夹+点进去看视频信息、导出按「时间 剧名」建一级文件夹、按剧切块不跨剧合并、贴纸默认值。",
   "url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases",
   "exe_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.19/BaokuanMonitor.exe",
-  "desktop_version": "1.0.27",
-  "desktop_notes": "🔴 修好 TikTok 登录：打包版「扫码登录」以前点了没反应，现在软件内建原生登录窗口——手机扫码或账号直接登，登录态自动同步；新增「代理(挂梯子)」设置（TUN/系统代理留空即可，Clash 系统代理模式填 http://127.0.0.1:端口，登录和抓取都走它）。\n📱 修好视频号登录状态不同步：以前号会「假在线」（其实登录早失效了、列表还显示在线，一键发布却发不出去），现在打开后台自动核对真实登录态，失效的号立刻标「离线」提醒你重新扫码，列表/后台/一键发布三处一致。\n🎞 一键去重新增「抽帧」：每秒随机丢 1 帧再用相邻帧补回（时长不变、音画不漂），多打乱一层平台的逐帧指纹。\n🎚 去重默认参数优化：特效叠加/AB低透明度/每集后插视频默认开；上下蒙版更薄（覆盖 310~410）、音频去重更狠（音调 1~1.1、音量 1.01~1.15）。\n🖼 根治偶发白屏（窗口遮挡误判导致画面不刷新）。\n🧹 移除没做成的「作品健康」实验功能。\n🆕 含前版全部：音频声纹去重、增量更新、发布修复、防封号。数据/登录/设置/下载均不受影响。",
-  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.27/BaokuanMonitor_Setup_1.0.27.exe",
-  "update_manifest_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.27/update_manifest.json",
-  "update_pool_base": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/updates/"
+  "desktop_version": "1.0.28",
+  "desktop_notes": "🔗 全新「链接下载」页：粘贴 YouTube / TikTok / 抖音 / B站 / 微博 / Instagram / X 等 1000+ 站点链接就能下——单条视频，或整个主页 / 播放列表 / 合集批量下（勾选想要的）。可选画质，指定保存文件夹。TikTok / YouTube 需连 VPN（代理在「博主监控」页设），抖音自动用软件里的登录 cookie。\n🔊 下载没声音·彻底根治：TikTok 的高清 H265 格式其实是「哑的」没音轨、YouTube 默认给的 Opus 音频 Windows 自带播放器解不了——现在所有下载统一强制 H264 画面 + AAC 声音（走到哪都能放的万能组合），下下来就能正常出声。之前下的没声音的重下一遍即可。\n🖥 浏览 / 加监控页更大：把工具栏和「添加监控」框并成一行，下面刷视频的区域更高更舒服。\n🟣 含前版全部：TikTok 加监控（内嵌浏览器抓资料，反爬也能加）+ 作品数更新监控、一键去重导出按变体分文件夹、发现爆款按平台分开、内嵌浏览器最小化/关闭、TikTok 原生登录、视频号登录同步与发布修复、抽帧去重、防封号。数据 / 登录 / 设置 / 下载均不受影响。\n📦 本版新增下载引擎（含 1000+ 站点解析器，上千个文件），体积较大，这次是整包更新（约 350MB），下载装好即用；后续小更新会恢复增量。",
+  "desktop_setup_url": "https://github.com/dangthiphuong2491991-a11y/douyin-baokuan-monitor/releases/download/v1.0.28/BaokuanMonitor_Setup_1.0.28.exe"
 }

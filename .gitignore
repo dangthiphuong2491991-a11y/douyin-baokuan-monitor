@@ -33,5 +33,9 @@ electron/sdk_dump/
 # 差量更新构建产物(清单/内容池/构建日志,不入库)
 update_manifest*.json
 update_pool_delta*/
+delta_*/
+manifest_*baseline.json
 _build_*.log
 dist_electron_v*/
+# 本次会话下载测试临时目录
+_audtest*/

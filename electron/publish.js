@@ -440,10 +440,8 @@ async function dumpAuthMat(params, onStatus) {
   // 尽力从 json 补种 cookie(找不到不致命)——真正的活登录本来就在 webview 分区里(用户扫码登录处),
   // 之前这里读不到 json 就抛"账号未登录"、把整个取会话搞挂 = 打包机发布卡死的根因。
   try { await injectCookies(part, aid); } catch (e) { st('injectCookies跳过(用分区活会话): ' + String(e).slice(0, 40)); }
-  // cookies(全量)——直接取分区里的(扫码登录后就有)
-  let cookies = [];
-  try { cookies = (await ses.cookies.get({ domain: 'weixin.qq.com' })).map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path })); } catch (e) {}
-  // localStorage 需要加载一个同源页面才能读
+  // cookie + localStorage 都在"导航之后"读：先用持久分区打开一次后台页，微信会顺势把 cookie 续期(Set-Cookie)，
+  // 之后读到的才是"刚续过的新 cookie"。旧代码在导航前读 → 读到旧的/快过期的 → 发布时 300334。
   const win = new BrowserWindow({ show: false, webPreferences: { partition: part, backgroundThrottling: false, sandbox: false } });
   const wc = win.webContents;
   const cleanup = () => { try { win.destroy(); } catch (e) {} };
@@ -454,6 +452,9 @@ async function dumpAuthMat(params, onStatus) {
     await sleep(1500);
     ls = await wc.executeJavaScript('(function(){var o={};for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(/finger|device|uin|token|_did|fpd/i.test(k))o[k]=localStorage.getItem(k);}return o;})()').catch(() => ({}));
   } catch (e) { st('ls读取失败:' + e); }
+  // 导航续期之后再读 cookie —— 拿到的是刚被微信续过期的新 cookie(供纯后端发布/保活缓存用)
+  let cookies = [];
+  try { cookies = (await ses.cookies.get({ domain: 'weixin.qq.com' })).map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path })); } catch (e) {}
   cleanup();
   st('导出完成 cookies=' + cookies.length + ' lsKeys=' + Object.keys(ls || {}).length);
   // 分区里没有有效 sessionid = 这个号在这台机器上没真正登录过(或已失效)→ 给个清楚提示,别再含糊报"账号未登录"

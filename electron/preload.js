@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearPartition: (aid) => ipcRenderer.invoke('clear-partition', aid),
   getPartitionCookies: (aid) => ipcRenderer.invoke('get-partition-cookies', aid),
   platformLogin: (platform, proxy) => ipcRenderer.invoke('platform-login', { platform, proxy }),
+  minimizeWindow: () => ipcRenderer.send('win-minimize'),
   dbg: (msg) => ipcRenderer.send('dbg', msg),
 });

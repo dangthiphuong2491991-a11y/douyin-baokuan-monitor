@@ -27,6 +27,11 @@ import channels
 import dedup
 import ffdedup
 import jianying
+try:
+    import ytdl as _YTDL          # 链接下载(yt-dlp:YouTube/TikTok/抖音/B站等 1000+ 站点)
+    _HAS_YTDL = True
+except Exception:
+    _HAS_YTDL = False
 
 
 async def resolve_aweme_id(text: str, platform: str = "douyin"):
@@ -1005,6 +1010,162 @@ def api_del_blogger(sec_uid: str):
     return {"ok": True}
 
 
+class AddScrapedBody(BaseModel):
+    platform: str = "tiktok"
+    sec_uid: str
+    nickname: str = ""
+    unique_id: str = ""
+    avatar: str = ""
+    followers: int = 0
+    video_count: int = 0
+    signature: str = ""
+    url: str = ""
+    videos: list = []
+
+
+@app.post("/api/bloggers/add_scraped")
+async def api_add_blogger_scraped(body: AddScrapedBody):
+    """从内嵌浏览器抓到的资料直接加监控——TikTok 的 f2 接口被反爬挡死，资料/视频改从
+    webview 里的 __UNIVERSAL_DATA__ 抓，这里只负责落库+建基线，不走 f2。"""
+    platform = body.platform or "tiktok"
+    sec_uid = (body.sec_uid or "").strip()
+    if not sec_uid:
+        return JSONResponse({"error": "没抓到 secUid，刷新博主主页后再试"}, status_code=400)
+    if any(b["sec_user_id"] == sec_uid and b.get("platform", "douyin") == platform
+           for b in config["bloggers"]):
+        return JSONResponse({"error": "该博主已在监控列表中"}, status_code=400)
+    blogger = {
+        "sec_user_id": sec_uid, "platform": platform,
+        "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "notify": True,
+        "nickname": body.nickname or body.unique_id or sec_uid[:16],
+        "unique_id": body.unique_id or "",
+        "avatar": body.avatar or "",
+        "follower_count": body.followers or "",
+        "aweme_count": body.video_count or "",
+        "signature": body.signature or "",
+        "home_url": body.url or "",
+        "tk_video_count": int(body.video_count or 0),  # videoCount 水位线：涨了=有新作
+    }
+    config["bloggers"].append(blogger)
+    _save(CONFIG_FILE, config)
+    # 基线：把当前抓到的视频 id 全标记为已看（现有作品不算更新）。网格没抓到也没关系——
+    # 首次 tk_report 会补建基线（见 api_tk_report），照样不会把历史作品当新的刷屏。
+    ids = [v.get("aweme_id") for v in (body.videos or []) if isinstance(v, dict) and v.get("aweme_id")]
+    if ids:
+        state["seen"][sec_uid] = list(dict.fromkeys(ids))
+        _save(STATE_FILE, state)
+    return {"ok": True, "blogger": blogger}
+
+
+class TkReportBody(BaseModel):
+    sec_uid: str
+    platform: str = "tiktok"
+    video_count: int = 0
+    videos: list = []   # [{aweme_id, web_url, cover, desc}]
+
+
+async def _process_scraped_new(blogger: dict, v: dict):
+    """webview 抓到的新视频：落更新动态 + 下封面 + 弹窗提醒。正片下载走手动（后续 webview 取播放地址）。"""
+    platform = blogger.get("platform", "tiktok")
+    aid = v.get("aweme_id")
+    nickname = blogger.get("nickname", "")
+    dl = get_dl()
+    folder = platform_dir(platform) / sanitize(nickname, 30)
+    date_tag = datetime.now().strftime("%Y%m%d")
+    desc = (v.get("desc") or "").strip()
+    stem = f"{date_tag}_{sanitize(desc, 40)}_{(aid or '')[-6:]}"
+    rec = {
+        "aweme_id": aid, "sec_user_id": blogger["sec_user_id"], "platform": platform,
+        "nickname": nickname, "desc": desc or "(无标题)", "type": "视频",
+        "create_time": "", "found_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "duration": "", "digg": 0, "comment": 0, "collect": 0, "share": 0,
+        "url": v.get("web_url") or "", "cover": "",
+    }
+    cover, cover_path = v.get("cover"), None
+    if cover:
+        cover_path = folder / f"{stem}.jpg"
+        try:
+            if await download_file(cover, cover_path):
+                rec["cover"] = f"/files/{cover_path.relative_to(dl).as_posix()}"
+            else:
+                cover_path = None
+        except Exception:
+            cover_path = None
+    state["updates"].insert(0, rec)
+    state["updates"] = state["updates"][:500]
+    _save(STATE_FILE, state)
+    notify(f"📢 {nickname} 更新了新视频", desc or "(无标题)",
+           icon=cover_path if rec["cover"] else None)
+
+
+async def _notify_count_bump(blogger: dict, gain: int):
+    """videoCount 兜底：只知道作品总数涨了(TikTok 限流没抓到网格详情)，记一条动态+弹窗提示去浏览器看。"""
+    nickname = blogger.get("nickname", "")
+    rec = {
+        "aweme_id": f"countbump_{blogger['sec_user_id'][:8]}_{int(time.time())}",
+        "sec_user_id": blogger["sec_user_id"], "platform": blogger.get("platform", "tiktok"),
+        "nickname": nickname,
+        "desc": f"发了 {gain} 个新作品（TikTok 限流暂没抓到详情，点「浏览/加监控」打开 TA 主页即可看/下）",
+        "type": "视频", "create_time": "", "found_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "duration": "", "digg": 0, "comment": 0, "collect": 0, "share": 0,
+        "url": blogger.get("home_url") or "", "cover": "",
+    }
+    state["updates"].insert(0, rec)
+    state["updates"] = state["updates"][:500]
+    _save(STATE_FILE, state)
+    notify(f"📢 {nickname} 更新了", rec["desc"])
+
+
+@app.post("/api/bloggers/tk_report")
+async def api_tk_report(body: TkReportBody):
+    """内嵌浏览器把 TikTok 博主主页抓到的 {video_count, videos[]} 回报后端，
+    后端按 seen 比对出新视频→记更新动态+弹窗。绕开被反爬挡死的 f2 接口。"""
+    sec_uid = (body.sec_uid or "").strip()
+    b = _blogger(sec_uid)
+    if not b:
+        return JSONResponse({"error": "博主不在库里"}, status_code=404)
+    old_wm = int(b.get("tk_video_count") or 0)   # 上次记的作品总数(水位线)
+    new_wm = int(body.video_count or 0)
+    if new_wm:                                # 更新资料水位线
+        b["aweme_count"] = new_wm
+        b["tk_video_count"] = new_wm
+        _save(CONFIG_FILE, config)
+    vids = [v for v in (body.videos or []) if isinstance(v, dict) and v.get("aweme_id")]
+    if not vids:
+        # 网格被 TikTok 限流没抓到("出错了")→用 videoCount 水位线兜底：作品总数涨了就通知
+        # (拿不到具体是哪条，提示去浏览器看/下)。保证「限流也不漏发新作品」。
+        if new_wm and old_wm and new_wm > old_wm and b.get("notify", True):
+            gain = new_wm - old_wm
+            try:
+                await _notify_count_bump(b, gain)
+            except Exception as e:
+                log_err(f"videoCount 兜底通知失败: {e}")
+            return {"ok": True, "new": 0, "count_bump": gain}
+        return {"ok": True, "new": 0, "note": "网格没抓到视频"}
+    seen = set(state["seen"].get(sec_uid, []))
+    if not seen:                              # 还没基线 → 首次全标记已看，不算更新
+        state["seen"][sec_uid] = [v["aweme_id"] for v in vids]
+        _save(STATE_FILE, state)
+        return {"ok": True, "new": 0, "note": "已建立基线"}
+    new_vids = [v for v in vids if v["aweme_id"] not in seen]
+    if not new_vids:
+        return {"ok": True, "new": 0}
+    if not b.get("notify", True):             # 没开提醒也吸收进 seen，免开启后刷屏
+        state["seen"][sec_uid].extend(v["aweme_id"] for v in new_vids)
+        _save(STATE_FILE, state)
+        return {"ok": True, "new": 0}
+    cnt = 0
+    for v in reversed(new_vids):              # 网格是新→旧，倒序处理让最新的落在动态最上面
+        state["seen"][sec_uid].append(v["aweme_id"])
+        try:
+            await _process_scraped_new(b, v)
+            cnt += 1
+        except Exception as e:
+            log_err(f"处理抓取新视频失败: {e}")
+    _save(STATE_FILE, state)
+    return {"ok": True, "new": cnt}
+
+
 class NotifyBody(BaseModel):
     sec_user_id: str
     notify: bool
@@ -1849,22 +2010,27 @@ def _mark_session(aid: str, ok: bool):
 
 
 async def _ch_keepalive_loop():
-    """视频号登录保活：每4小时用各账号的持久档案静默访问一次后台（离屏无窗口），
-    cookie 被服务端续期 → 登录态长期有效（100小时+）。只报活不报死：
-    偶发网络失败不把账号误标下线（真死了会在下次发布/拉列表时被标）。"""
+    """视频号登录保活（对齐小V猫的思路）：**每 15 分钟**对每个账号调一次 Electron /authmat——
+    它用账号的持久分区 persist:ch_<aid> 静默打开一次视频号后台页，微信服务端顺势把 cookie 续期，
+    登录态长期不掉。**关键**：续的就是发布真正用的那套会话（persist:ch_<aid>），并顺手把新鲜
+    会话写进 _ch_auth_cache，发布直接拿新的用 → 不再撞过期 cookie 的 300334。
+    (旧版续的是另一套 Playwright 快照会话，和发布不是同一个，等于白续，这是发布老失败+掉登录的真凶。)
+    只报活不报死：偶发失败不误标离线(真失效会在发布时暴露)。"""
+    await asyncio.sleep(90)                       # 启动 90 秒后先续一轮(等 Electron 8791 发布服务起来)
     while True:
-        await asyncio.sleep(4 * 3600)
         for a in list(_ch_accounts()):
             aid = a.get("id")
-            if not aid or not _ch_state(aid).exists():
+            if not aid:
                 continue
             try:
-                ok = await channels.check_login(_ch_state(aid))
-                if ok:
+                auth = await _get_channels_auth(aid, force=True)   # 命中 /authmat→导航 persist:ch_<aid> 续期+取新 cookie+刷新缓存
+                if auth and auth.cookies.get("sessionid"):
                     _mark_session(aid, True)
-            except Exception:
-                pass
-            await asyncio.sleep(30)     # 账号间隔开，别同时开一堆浏览器
+                    _bpub_log(f"[keepalive] {aid} 已续期(15min一次) cookies={list(auth.cookies.keys())}")
+            except Exception as e:
+                _bpub_log(f"[keepalive] {aid} 续期失败(忽略,不误标离线): {str(e)[:80]}")
+            await asyncio.sleep(20)               # 账号间隔开，别同时开一堆隐藏窗口
+        await asyncio.sleep(15 * 60)              # 15 分钟一轮
 
 
 def _ch_accounts() -> list:
@@ -3004,7 +3170,8 @@ try:
 except Exception as _cu_e:                      # 缺依赖等异常不阻断启动,回退老路
     _CU, _HAS_CU = None, False
 
-_ch_auth_cache = {}                             # aid -> ChannelsAuth(cookies+设备指纹+uin)
+_ch_auth_cache = {}                             # aid -> (ChannelsAuth, 取到的时间戳)
+_CH_AUTH_TTL = 15 * 60                           # 活会话缓存最多用 15 分钟,过了必重新去 /authmat 续期取新的(和保活同频),绝不拿过期 cookie 硬发→300334
 
 
 def _bpub_log(msg: str):
@@ -3017,10 +3184,14 @@ def _bpub_log(msg: str):
 
 
 async def _get_channels_auth(aid: str, force: bool = False):
-    """从 Electron /authmat 取活会话鉴权材料(cookies + finger-print-device-id + uin),缓存复用。"""
-    if not force and aid in _ch_auth_cache:
-        return _ch_auth_cache[aid]
-    async with httpx.AsyncClient(timeout=60) as c:
+    """从 Electron /authmat 取活会话鉴权材料(cookies + finger-print-device-id + uin)。
+    调 /authmat 会用账号持久分区 persist:ch_<aid> 静默打开一次视频号后台页 → 微信顺势把 cookie 续期。
+    缓存最多用 15 分钟(_CH_AUTH_TTL),过期或 force=True 就重新去续一次,发布永远拿到新鲜会话。"""
+    if not force:
+        ent = _ch_auth_cache.get(aid)
+        if ent and (time.time() - ent[1]) < _CH_AUTH_TTL:
+            return ent[0]
+    async with httpx.AsyncClient(timeout=90) as c:
         r = await c.post(_ELECTRON_PUB + "/authmat", json={"aid": aid})
         j = r.json()
     if not j.get("ok"):
@@ -3030,8 +3201,42 @@ async def _get_channels_auth(aid: str, force: bool = False):
     fp = ls.get("_finger_print_device_id", "")
     uin = ls.get("finder_uin", "") or cookies.get("wxuin", "")
     auth = _CU.ChannelsAuth(cookies, fp, uin)
-    _ch_auth_cache[aid] = auth
+    _ch_auth_cache[aid] = (auth, time.time())
     return auth
+
+
+async def _refresh_ch_state_from_live(aid: str) -> bool:
+    """发布前把 Electron 活会话(/authmat,已被15min保活续期)的最新 cookie 写成 Playwright storage_state,
+    喂给 channels.upload(Playwright·穿透wujie·小V猫同款)——保证它用最新登录态,不会开到"登录已失效"。"""
+    try:
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(_ELECTRON_PUB + "/authmat", json={"aid": aid})
+            j = r.json()
+    except Exception as e:
+        _bpub_log(f"  刷新_ch_state取会话失败(用旧的继续): {str(e)[:60]}")
+        return False
+    if not j.get("ok"):
+        _bpub_log(f"  刷新_ch_state: 活会话未登录 {str(j.get('msg',''))[:60]}")
+        return False
+    cks = []
+    for ck in (j.get("cookies") or []):
+        if not ck.get("name"):
+            continue
+        cks.append({"name": ck["name"], "value": ck.get("value", ""),
+                    "domain": ck.get("domain", ".weixin.qq.com"), "path": ck.get("path", "/"),
+                    "expires": -1, "httpOnly": False, "secure": True, "sameSite": "None"})
+    if not any(c["name"] in ("sessionid", "wxuin") for c in cks):
+        return False
+    ls = [{"name": k, "value": str(v)} for k, v in (j.get("localStorage") or {}).items()]
+    state = {"cookies": cks, "origins": [{"origin": "https://channels.weixin.qq.com", "localStorage": ls}]}
+    try:
+        _ch_state(aid).parent.mkdir(parents=True, exist_ok=True)
+        _ch_state(aid).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        _bpub_log(f"  已用活会话刷新 _ch_state(cookies={len(cks)})")
+        return True
+    except Exception as e:
+        _bpub_log(f"  写 _ch_state 失败: {str(e)[:60]}")
+        return False
 
 
 async def _publish_via_backend(t: dict, aid: str) -> tuple:
@@ -3069,10 +3274,23 @@ async def _publish_via_backend(t: dict, aid: str) -> tuple:
                 continue
             return False, str(e)[:160]
         ec = resp.get("errCode")
+        _data = resp.get("data") or {}
+        _inner = _data.get("baseResp") or {}
+        _inner_ec = _inner.get("errcode", 0)
+        _obj = _data.get("objectId")
         _bpub_log(f"  post_create 响应: {json.dumps(resp, ensure_ascii=False)[:300]}")
-        if ec == 0:
-            _bpub_log(f"  ✅ 发布成功 objectId={((resp.get('data') or {}).get('objectId'))}")
+        # 真成功 = 外层errCode==0 且 内层baseResp无错 且 拿到objectId。
+        # 【修老bug】以前只看外层errCode==0就报"✅发布成功"——但内层 baseResp.errcode=-11224(网络错误/会话token不对)、
+        #  objectId=None 的"假成功"也被当成发布成功了(视频其实没发出去,用户还以为发了)。现在必须内层也OK+有objectId。
+        if ec == 0 and (_inner_ec in (0, None)) and _obj:
+            _bpub_log(f"  ✅ 发布成功 objectId={_obj}")
             return True, ("发布成功" + (f"(已挂剧集 {drama['title']})" if drama else ""))
+        if ec == 0 and ((_inner_ec not in (0, None)) or not _obj):    # 外层0但其实没发出去
+            _bpub_log(f"  ⚠假成功: 外层errCode=0 但内层errcode={_inner_ec} objectId={_obj}(实际没发出去)")
+            if attempt == 0:
+                _ch_auth_cache.pop(aid, None)
+                continue                                              # 刷新会话再试一次
+            return False, f"发布未成功(视频号内层报错 {_inner_ec} {_inner.get('errmsg','')})"
         # 实名验证类:直接报,交给上层停号 + 常驻提醒(纯后端看不到弹窗,靠 errMsg 关键词识别)
         if _is_verify_msg(resp.get("errMsg", "")):
             return False, "实名验证：该账号需完成实名验证才能发表（errCode=%s）" % ec
@@ -3231,27 +3449,27 @@ async def _acct_upload_worker(aid: str):
                     t.update(stage=f"发布失败({msg[:40]})，自动重试第{_try}次…")
                     await asyncio.sleep(10 * _try)
                 try:
-                    # ①优先纯后端(逆向官方协议·httpx直传·不弹浏览器不点按钮·最快最稳)
-                    #  需要 Electron 8791 在跑(仅用它导出活会话 cookies/设备指纹,不驱动窗口)
-                    if _HAS_CU and await _electron_pub_up():
-                        t.update(stage="纯后端上传发布中(不弹浏览器)…")
+                    # 【小V猫同款·首选】Playwright 打开真发表页发布——它穿透 wujie 的 shadow DOM,点得中「发表」。
+                    #  (CDP按坐标点会点到 wujie 外壳点不动;纯后端直传缺网页内存token会300334——都不如这条稳。)
+                    #  发布前先从活会话(/authmat,已被15分钟保活续期)刷新 _ch_state,喂给 Playwright 最新登录态。
+                    if await _electron_pub_up():
+                        await _refresh_ch_state_from_live(aid)
+                    t.update(stage="用网页真会话发布中(穿透wujie点发表·比纯后端稳)…")
+                    ok, msg = await channels.upload(
+                        _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
+                        desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
+                        link=t.get("link", ""), statement=t.get("statement", ""),
+                        location=t.get("location", ""), collection=t.get("collection", ""),
+                        drama=t.get("drama", ""), drama_title=t.get("drama_title", ""),
+                        activity=t.get("activity", ""),
+                        schedule=sched, headless=False, err_dir=DATA,
+                        show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
+                        on_status=lambda m: t.update(stage=m))
+                    # 极少数:Playwright 浏览器起不来 → 纯后端兜底试一次(缺token可能300334,但聊胜于无)
+                    if (not ok) and _HAS_CU and await _electron_pub_up() \
+                       and any(k in (msg or "") or k in (msg or "").lower() for k in ("浏览器", "启动失败", "browser", "playwright", "chromium")):
+                        t.update(stage="Playwright起不来→纯后端兜底…")
                         ok, msg = await _publish_via_backend(t, aid)
-                    # ②回退:Electron 原生窗口发布器(隐藏窗口·CDP)
-                    elif await _electron_pub_up():
-                        t.update(stage="用原生会话发布中(不弹浏览器)…")
-                        ok, msg = await _publish_via_electron(t, aid)
-                    # ③最后回退:老 Playwright
-                    else:
-                        ok, msg = await channels.upload(
-                            _ch_state(aid), t["video_path"], title=t["title"], tags=t["tags"],
-                            desc=t["desc"], cover_path=t.get("cover_path", ""), original=t["original"],
-                            link=t.get("link", ""), statement=t.get("statement", ""),
-                            location=t.get("location", ""), collection=t.get("collection", ""),
-                            drama=t.get("drama", ""), drama_title=t.get("drama_title", ""),
-                            activity=t.get("activity", ""),
-                            schedule=sched, headless=False, err_dir=DATA,
-                            show_browser=bool(config.get("ch_show_browser", False)),  # 调试:显示浏览器
-                            on_status=lambda m: t.update(stage=m))
                 except Exception as e:
                     ok, msg = False, str(e)[:160]
                 if ok:
@@ -3693,6 +3911,121 @@ def api_ffdedup_status():
     tasks.reverse()
     return {"running": FD["running"], "status": FD["status"], "made": FD["made"],
             "error": FD["error"], "counts": counts, "tasks": tasks}
+
+
+# ==================== 链接下载(yt-dlp:YouTube/TikTok/抖音/B站/微博等 1000+ 站点) ====================
+def _ytdl_proxy(url: str) -> str:
+    u = (url or "").lower()
+    if "douyin.com" in u or "bilibili.com" in u or "weibo.c" in u or "acfun" in u:
+        return ""                                   # 国内站不走代理
+    return config.get("tiktok_proxy", "") or ""     # TikTok/YouTube/IG/X 等走你设的 VPN 代理
+
+
+def _ytdl_cookies(url: str) -> str:
+    u = (url or "").lower()
+    cks = config.get("cookies") or {}
+    if "tiktok.com" in u:
+        return cks.get("tiktok", "") or ""
+    if "douyin.com" in u:
+        return cks.get("douyin", "") or ""
+    return ""
+
+
+def _ytdl_dir() -> str:
+    return (config.get("ytdl_dir") or "").strip() or str(get_dl() / "链接下载")
+
+
+class YtdlExtractBody(BaseModel):
+    url: str
+
+
+@app.post("/api/ytdl/extract")
+async def api_ytdl_extract(body: YtdlExtractBody):
+    if not _HAS_YTDL:
+        return JSONResponse({"error": "下载引擎(yt-dlp)没装好"}, status_code=500)
+    url = (body.url or "").strip()
+    if not url:
+        return JSONResponse({"error": "把视频/主页/播放列表链接粘进来"}, status_code=400)
+    res = await asyncio.to_thread(_YTDL.extract, url, _ytdl_proxy(url), _ytdl_cookies(url))
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error", "解析失败")}, status_code=400)
+    return res
+
+
+class YtdlDownloadBody(BaseModel):
+    urls: list[str] = []
+    quality: str = "best"
+    save_dir: str = ""
+
+
+_YTDL_SEM = None
+
+
+def _ytdl_sem():
+    global _YTDL_SEM
+    if _YTDL_SEM is None:
+        _YTDL_SEM = asyncio.Semaphore(3)     # 最多3条同时下,别把带宽/站点风控占满
+    return _YTDL_SEM
+
+
+@app.post("/api/ytdl/download")
+async def api_ytdl_download(body: YtdlDownloadBody):
+    if not _HAS_YTDL:
+        return JSONResponse({"error": "下载引擎(yt-dlp)没装好"}, status_code=500)
+    urls = [u.strip() for u in (body.urls or []) if u and u.strip()]
+    if not urls:
+        return JSONResponse({"error": "没有要下载的链接"}, status_code=400)
+    save_dir = (body.save_dir or "").strip() or _ytdl_dir()
+    quality = body.quality or "best"
+    tids = []
+    for url in urls:
+        tid = _YTDL.mk_task(url)
+        tids.append(tid)
+
+        async def _run(url=url, tid=tid):
+            async with _ytdl_sem():
+                await asyncio.to_thread(_YTDL.download_one, url, quality, save_dir,
+                                        _ytdl_proxy(url), _ytdl_cookies(url), tid)
+        asyncio.create_task(_run())
+    return {"ok": True, "tids": tids, "save_dir": save_dir, "count": len(urls)}
+
+
+@app.get("/api/ytdl/tasks")
+def api_ytdl_tasks():
+    if not _HAS_YTDL:
+        return {"tasks": [], "dir": ""}
+    return {"tasks": _YTDL.tasks_snapshot(), "dir": _ytdl_dir()}
+
+
+@app.post("/api/ytdl/clear")
+def api_ytdl_clear():
+    if _HAS_YTDL:
+        _YTDL.clear_finished()
+    return {"ok": True}
+
+
+class YtdlDirBody(BaseModel):
+    path: str = ""
+
+
+@app.post("/api/ytdl/set_dir")
+def api_ytdl_set_dir(body: YtdlDirBody):
+    p = (body.path or "").strip()
+    if p:
+        config["ytdl_dir"] = p
+        _save(CONFIG_FILE, config)
+    return {"ok": True, "dir": _ytdl_dir()}
+
+
+@app.post("/api/ytdl/open_dir")
+def api_ytdl_open_dir():
+    d = _ytdl_dir()
+    try:
+        os.makedirs(d, exist_ok=True)
+        os.startfile(d)
+    except Exception:
+        pass
+    return {"ok": True, "dir": d}
 
 
 @app.post("/api/ffdedup/tasks/delete")

@@ -743,8 +743,18 @@ def dedup_batch(episode_paths, cfg, out_dir, per=3, count=0, prefix="去重",
                 base = f"{safe}_{base}"
             for v in range(nv):
                 # 变体：同一成品渲染N个不同随机参数的版本(多账号各发一个,指纹互不相同)
-                name = base if v == 0 else f"{base}_变体{v+1}"
-                tasks.append((chunk, os.path.join(out_dir, name + ".mp4"), name, safe, (v, nv)))
+                # 变体数=1 → 全部平铺进 out_dir（一个文件夹）；
+                # 变体数=N(>1) → 分 N 个「变体1/变体2/…」子文件夹，每个文件夹=一整套完整变体
+                #   (含本批所有成品的第 v 版)，可整个丢给一个账号发布，账号间指纹互不相同。
+                if nv == 1:
+                    out_p = os.path.join(out_dir, base + ".mp4")
+                    name = base
+                else:
+                    vdir = os.path.join(out_dir, f"变体{v+1}")
+                    os.makedirs(vdir, exist_ok=True)
+                    out_p = os.path.join(vdir, base + ".mp4")   # 文件夹区分变体→文件名不再带_变体N
+                    name = f"变体{v+1}/{base}"                   # 仅用于任务记录显示
+                tasks.append((chunk, out_p, name, safe, (v, nv)))
 
     total = len(tasks)
     made = []

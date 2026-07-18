@@ -320,6 +320,9 @@ ipcMain.on('dbg', (_e, msg) => {
   try { fs.appendFileSync(path.join(__dirname, 'dbg.log'), '[DBG] ' + msg + '\n'); } catch (e) {}
 });
 
+// 内嵌浏览器「最小化」按钮：把主窗口最小化到任务栏
+ipcMain.on('win-minimize', () => { try { if (win) win.minimize(); } catch (e) {} });
+
 // ============ 抖音/TikTok 登录：开一个真登录窗口（走系统代理，可选自定义代理=挂 VPN），
 // 用户手机扫码或账号登录，后台每 1.5s 轮询会话 cookie，读到 sessionid 就把整段 cookie 回传前端。
 // 这就是把 pywebview 版的 login_qr 搬到 Electron——之前 Electron 版扫码登录是死的（只有视频号有内嵌登录）。============
@@ -548,6 +551,24 @@ if (!gotSingleInstanceLock) {
     if (win) { try { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } catch (e) {} }
   });
   app.whenReady().then(() => { startBackend(); startPublishServer(); });
+  // 「浏览/加监控」的 TikTok/抖音 webview:点头像/名字会想开新窗口(target=_blank / window.open)。
+  // Electron 32 <webview> 已删 renderer 端 new-window 事件,改在主进程用 setWindowOpenHandler 拦。
+  // 只对 tiktok/douyin 域名就地导航(deny 弹窗+loadURL 换页),视频号/火山等其它 webview 不动。
+  app.on('web-contents-created', (event, contents) => {
+    try {
+      if (contents.getType && contents.getType() === 'webview') {
+        contents.setWindowOpenHandler(({ url }) => {
+          try {
+            if (url && /^https?:\/\/([\w-]+\.)*(tiktok|douyin)\.com/i.test(url)) {
+              contents.loadURL(url);
+              return { action: 'deny' };
+            }
+          } catch (_) {}
+          return { action: 'allow' };
+        });
+      }
+    } catch (_) {}
+  });
   app.on('window-all-closed', () => {
     if (backend) { try { backend.kill(); } catch (e) {} }
     app.quit();

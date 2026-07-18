@@ -217,9 +217,11 @@
     <nav class="nav">
       <div class="grp">监控</div>
       <a data-page="home" class="on"><span class="ic">👤</span>博主监控</a>
+      <a data-page="browse"><span class="ic">🌐</span>浏览 / 加监控</a>
       <a data-page="feed"><span class="ic">🆕</span>更新动态<span class="badge" id="navBadge" style="display:none">0</span></a>
       <a data-page="discover"><span class="ic">🔥</span>发现爆款</a>
       <a data-page="lib"><span class="ic">📦</span>下载库</a>
+      <a data-page="linkdl"><span class="ic">🔗</span>链接下载</a>
       <a data-page="tasks"><span class="ic">⬇</span>任务中心<span class="badge" id="taskBadge" style="display:none">0</span></a>
       <div class="grp">加工 / 发布</div>
       <a data-page="dedup"><span class="ic">📐</span>做剪映模版</a>
@@ -259,6 +261,7 @@
           <div class="d" id="loginDesc" style="color:var(--sub);font-size:13px;margin-top:8px">先登录，每个博主才能翻页拿到更多作品、排出真正的「前N」。<b>播放量接口始终不返回，前N按点赞排。</b></div>
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn" onclick="loginQR(this)">📱 扫码登录</button>
+            <button class="btn" style="background:var(--acc2);color:#fff;border:0" onclick="gotoBrowse()">🖥 打开浏览器（刷视频 / 从关注加监控）</button>
             <button class="btn ghost" onclick="loginBrowser(this)">🌐 从浏览器导入</button>
             <button class="btn ghost" onclick="pasteCookie()">📋 粘贴 Cookie</button>
             <button class="btn ghost" id="logoutBtn" onclick="logout()" style="display:none">退出登录</button>
@@ -294,6 +297,23 @@
           <span style="color:var(--dim);font-size:12px;align-self:center">换电脑时：导出成文件 → 拷到新电脑 → 导入，博主一键搬走（不含登录信息）</span>
         </div>
         <div id="bloggerList" class="bloggers"></div>
+      </section>
+
+      <!-- 内嵌浏览器：抖音/TikTok 直接刷视频 + 从关注里一键加监控 -->
+      <section class="page" id="page-browse">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="brNav('back')" title="后退">←</button>
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="brNav('fwd')" title="前进">→</button>
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="brNav('reload')" title="刷新">⟳</button>
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="brNav('home')">🏠 主页</button>
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="brNav('following')">👤 我的关注</button>
+          <input id="brAddInput" style="flex:1;min-width:120px;padding:7px 12px;font-size:13px" placeholder="进博主主页会自动填这里 → 点「添加监控」；也可粘主页链接回车。需连 VPN">
+          <button class="btn" id="brAddBtn" style="padding:7px 14px;flex:none" onclick="addBlogger('brAddInput','brAddBtn')">➕ 添加监控</button>
+          <button class="btn ghost" style="padding:6px 10px;flex:none" onclick="gotoHome()" title="收起浏览器，回到软件主界面（软件不关，继续运行）">✕ 关闭浏览器</button>
+        </div>
+        <div id="brBody" style="height:calc(100vh - 176px);min-height:420px;position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#0a0a0a">
+          <div id="brEmpty" style="position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;color:#888;font-size:14px"><div style="font-size:32px">🌐</div><div>加载当前平台网站中…</div></div>
+        </div>
       </section>
 
       <!-- 更新动态 -->
@@ -385,6 +405,32 @@
         <div class="lead">所有下载的原片，按博主分类。点击缩略图播放。下过的合集自动进「合集追更」。</div>
         <div id="mixFollowBox"></div>
         <div id="libBox"></div>
+      </section>
+
+      <!-- 链接下载 -->
+      <section class="page" id="page-linkdl">
+        <h2 class="hero">链接<span class="g">下载</span></h2>
+        <div class="lead">粘贴 <b>YouTube / TikTok / 抖音 / B站 / 微博 / Instagram / X</b> 等平台的<b>视频 / 主页 / 播放列表 / 合集</b>链接,一键下载(1000+ 站点)。TikTok/YouTube 需连 VPN(代理在「博主监控」页设，抖音用软件里的登录 cookie)。</div>
+        <div class="addbar card" style="margin-bottom:10px">
+          <input id="ytUrl" placeholder="粘贴 视频 / 主页 / 播放列表 / 合集 链接，回车提取">
+          <button class="btn" id="ytExtractBtn" onclick="ytExtract()">🔍 提取</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;color:var(--sub)">
+          <span>画质</span>
+          <select id="ytQuality" style="padding:5px 8px;border-radius:8px">
+            <option value="best">最高清</option>
+            <option value="1080">≤1080p</option>
+            <option value="720">≤720p</option>
+            <option value="480">≤480p</option>
+            <option value="audio">只要音频(mp3)</option>
+          </select>
+          <span style="margin-left:10px">保存到</span>
+          <span id="ytDir" style="font-family:monospace;color:var(--dim);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
+          <button class="btn ghost" style="padding:4px 10px" onclick="ytChangeDir()">更改</button>
+          <button class="btn ghost" style="padding:4px 10px" onclick="ytOpenDir()">📁 打开</button>
+        </div>
+        <div id="ytResult"></div>
+        <div id="ytTasksWrap" style="margin-top:14px"></div>
       </section>
 
       <!-- 任务中心 -->
@@ -893,7 +939,7 @@
             <input type="hidden" class="fdC" id="fd_stk_folder"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">贴几张 / 大小 / 不透明度</div></div>
             <input type="number" class="fdC" id="fd_stk_count" value="4" min="1" max="10" style="width:66px" onchange="saveFdCfg()"> 张
-            <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="1" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="2" style="width:64px" onchange="saveFdCfg()">
+            <span style="font-size:12px;color:var(--sub);margin-left:8px">大小</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_lo" value="2" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_sc_hi" value="3" style="width:64px" onchange="saveFdCfg()">
             <span style="font-size:12px;color:var(--sub);margin-left:8px">透明</span><input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_lo" value="0.03" style="width:64px" onchange="saveFdCfg()">~<input type="text" inputmode="decimal" class="fdC" id="fd_stk_al_hi" value="0.05" style="width:64px" onchange="saveFdCfg()"></div>
           <div class="setrow" style="padding:9px 0"><div class="l"><div class="t">背景音乐</div><div class="d">随机一首铺满，跟原声混音 · 选好音乐文件夹才生效</div></div>
             <label class="switch"><input type="checkbox" class="fdC" id="fd_bgm_enable" checked onchange="saveFdCfg()"><span class="slider"></span></label>
@@ -1453,6 +1499,105 @@ function switchPlatform(p){
   refresh();
   restoreNotify();
 }
+
+/* ===== 内嵌浏览器：抖音/TikTok 直接刷视频 + 从「我的关注」一键加监控（Electron webview，复用扫码登录会话） ===== */
+let _brWv={};   // 'douyin'|'tiktok' -> webview 元素
+const _BR_URLS={
+  douyin:{ home:'https://www.douyin.com/', following:'https://www.douyin.com/follow' },
+  tiktok:{ home:'https://www.tiktok.com/', following:'https://www.tiktok.com/following' },
+};
+function _brPlat(){ return (PLATFORM==='tiktok')?'tiktok':'douyin'; }
+function openBrowse(gotoUrl){
+  const emp=document.getElementById('brEmpty');
+  if(!(window.electronAPI&&window.electronAPI.isElectron)){ if(emp){emp.style.display='flex';emp.innerHTML='<div>内嵌浏览器仅桌面软件里可用</div>';} return; }
+  const plat=_brPlat();
+  // 用 visibility 切换(不碰 display——Electron webview 改 display 会缩成一小条)
+  Object.entries(_brWv).forEach(([k,w])=>{ if(w){ const on=(k===plat); w.style.visibility=on?'visible':'hidden'; w.style.zIndex=on?'2':'1'; } });
+  let wv=_brWv[plat];
+  if(!wv){
+    if(emp) emp.style.display='none';
+    wv=document.createElement('webview');
+    wv.id='brwv_'+plat;
+    wv.setAttribute('partition','persist:login_'+plat);   // 复用「扫码登录」窗口的登录态
+    wv.setAttribute('useragent', CH_UA);                  // 标准 Chrome UA，避免被当异常浏览器
+    wv.setAttribute('src', gotoUrl || _BR_URLS[plat].home);
+    wv.setAttribute('allowpopups','');
+    wv.style.cssText='position:absolute;top:0;right:0;bottom:0;left:0;border:0;visibility:visible;z-index:2';
+    const upd=e=>{ if(_brPlat()===plat){ const u=document.getElementById('brUrl'); let url=''; try{url=(e&&e.url)||(wv.getURL?wv.getURL():'');}catch(_){}; if(u) u.textContent=url||'—';
+      // 进到某博主主页 → 自动把地址填进「添加监控」框(用户没在框里打字才填)，点一下就能加
+      const ai=document.getElementById('brAddInput');
+      if(ai && document.activeElement!==ai && /(?:tiktok\.com\/@|douyin\.com\/user\/)/i.test(url)) ai.value=url;
+    } };
+    wv.addEventListener('did-navigate', upd);
+    wv.addEventListener('did-navigate-in-page', upd);
+    wv.addEventListener('dom-ready', ()=>upd());
+    // 点博主头像/名字 TikTok 会想开新窗口(target=_blank)——拦下来在本 webview 里就地打开，
+    // 这样「加入监控」抓的就是当前页(否则资料页跑到弹窗里，webview 抓不到)
+    wv.addEventListener('new-window', e=>{ try{ if(e&&e.url){ e.preventDefault&&e.preventDefault(); wv.loadURL(e.url); } }catch(_){} });
+    document.getElementById('brBody').appendChild(wv);
+    _brWv[plat]=wv;
+  } else if(gotoUrl){
+    try{ wv.loadURL(gotoUrl); }catch(e){}
+  }
+}
+function brNav(what){
+  const plat=_brPlat(), wv=_brWv[plat]; if(!wv) return;
+  try{
+    if(what==='back'){ if(wv.canGoBack&&wv.canGoBack()) wv.goBack(); }
+    else if(what==='fwd'){ if(wv.canGoForward&&wv.canGoForward()) wv.goForward(); }
+    else if(what==='reload'){ wv.reload(); }
+    else if(what==='home'){ wv.loadURL(_BR_URLS[plat].home); }
+    else if(what==='following'){ wv.loadURL(_BR_URLS[plat].following); }
+  }catch(e){}
+}
+// TikTok 从 webview 里抓资料(嵌入JSON)+视频网格(DOM),绕开被反爬挡死的 f2 接口
+const _TK_SCRAPE_JS = `(function(){try{
+  var out={ok:false,videos:[]};
+  var el=document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+  if(el){try{var d=JSON.parse(el.textContent);var ud=(((d.__DEFAULT_SCOPE__||{})['webapp.user-detail'])||{}).userInfo||{};var u=ud.user||{},s=ud.stats||{};
+    out.secUid=u.secUid||u.id||'';out.nickname=u.nickname||u.uniqueId||'';out.uniqueId=u.uniqueId||'';out.avatar=u.avatarLarger||u.avatarMedium||'';out.signature=u.signature||'';out.followers=s.followerCount||0;out.videoCount=s.videoCount||0;}catch(e){out.err1=String(e);}}
+  var items=[].slice.call(document.querySelectorAll('[data-e2e=\"user-post-item\"]'));
+  out.videos=items.map(function(it){var a=it.querySelector('a[href*=\"/video/\"]');var href=a?a.href:'';var m=href.match(/\\/video\\/(\\d+)/);var img=it.querySelector('img');var cover=img?(img.src||img.getAttribute('src')||''):'';var descEl=it.querySelector('[data-e2e=\"user-post-item-desc\"]');return {aweme_id:m?m[1]:'',web_url:href,cover:cover,desc:descEl?(descEl.innerText||'').trim():''};}).filter(function(v){return v.aweme_id;});
+  try{out.vis=document.visibilityState;out.hasErr=/出错了|went wrong/.test((document.body&&document.body.innerText)||'');}catch(e){}
+  out.ok=!!out.secUid;return out;
+}catch(e){return {ok:false,err:String(e)};}})()`;
+async function _tkScrape(wv){ try{ return await wv.executeJavaScript(_TK_SCRAPE_JS); }catch(e){ return {ok:false,err:String(e)}; } }
+// 加监控失败处理：已在列表里=友好提示(不是错误)；其它才弹错误框
+function _monitorAddCatch(e, name){
+  const m=(e&&e.message)||'添加失败';
+  if(/已在监控/.test(m)){ toast('✓「'+(name||'TA')+'」已经在监控列表里了，不用重复加'); refresh(); }
+  else uiAlert(m);
+}
+async function brAddCurrent(btn){
+  const plat=_brPlat(), wv=_brWv[plat];
+  if(!wv){ uiAlert('浏览器还没打开'); return; }
+  let url=''; try{ url=wv.getURL?wv.getURL():''; }catch(e){}
+  if(!url){ uiAlert('读不到当前网址，刷新一下再试'); return; }
+  const isProfile = plat==='douyin' ? /douyin\.com\/user\//.test(url) : /tiktok\.com\/@[\w.\-]+/.test(url);
+  if(!isProfile){ uiAlert('当前不是博主主页。请先点进一个博主的主页（在「我的关注」里点头像/名字进去），再点「加入监控」。'); return; }
+  const old=btn.textContent; btn.disabled=true; btn.textContent='添加中…';
+  if(plat==='tiktok'){
+    // TikTok 的 f2 接口被反爬挡死→资料/视频从 webview 里的 __UNIVERSAL_DATA__ 抓，直接落库
+    const s=await _tkScrape(wv);
+    if(!s||!s.secUid){
+      uiAlert('没抓到博主资料。请等主页完全加载出来（头像、粉丝数都显示了）再点「加入监控」。'+(s&&s.err?('\n\n技术信息：'+s.err):''));
+      btn.disabled=false; btn.textContent=old; return;
+    }
+    try{
+      await api('/api/bloggers/add_scraped','POST',{
+        platform:'tiktok', sec_uid:s.secUid, nickname:s.nickname||s.uniqueId||'',
+        unique_id:s.uniqueId||'', avatar:s.avatar||'', followers:s.followers||0,
+        video_count:s.videoCount||0, signature:s.signature||'', url:url, videos:s.videos||[]
+      });
+      toast('✅ 已加入监控：'+(s.nickname||s.uniqueId||'该博主')+'，去「博主监控」看看');
+      refresh();
+    }catch(e){ _monitorAddCatch(e, s.nickname||s.uniqueId); }
+    btn.disabled=false; btn.textContent=old; return;
+  }
+  try{ await api('/api/bloggers','POST',{url,platform:plat}); toast('✅ 已加入监控，去「博主监控」看看'); refresh(); }
+  catch(e){ _monitorAddCatch(e); }
+  btn.disabled=false; btn.textContent=old;
+}
 async function toggleGlobalNotify(on){
   try{ await api('/api/notify_enabled','POST',{enabled:!!on}); toast(on?'已开启弹窗提醒':'已关闭弹窗提醒，博主更新/预警都不再弹窗'); }
   catch(e){ uiAlert(e.message); const el=document.getElementById('notifySwitch'); if(el) el.checked=!on; }
@@ -1508,7 +1653,7 @@ async function api(url, method='GET', body){
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML}
 
 /* nav */
-const titles = {home:'博主监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',tasks:'任务中心',dedup:'做剪映模版',jy:'剪映混剪',ffd:'一键去重导出',channels:'视频号发布',set:'设置'};
+const titles = {home:'博主监控',browse:'浏览 / 加监控',feed:'更新动态',discover:'发现爆款',lib:'下载库',linkdl:'链接下载',tasks:'任务中心',dedup:'做剪映模版',jy:'剪映混剪',ffd:'一键去重导出',channels:'视频号发布',set:'设置'};
 document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on');
@@ -1519,6 +1664,8 @@ document.querySelectorAll('.nav a').forEach(a=>a.onclick=()=>{
   // 视频号发布页隐藏顶部标题栏(标题+上次检查对发布无意义)，给中间发布区腾出空间
   const tb=document.querySelector('.topbar'); if(tb) tb.style.display=(p==='channels')?'none':'flex';
   if(p==='lib') loadLib();
+  if(p==='linkdl') openLinkDl();
+  if(p==='browse') openBrowse();
   if(p==='tasks') startTaskPoll();
   if(p==='channels') openChannels();
   if(p==='dedup') openTpl();
@@ -1674,6 +1821,106 @@ async function loadLib(){
     renderLib();
   }catch(e){ box.innerHTML = emptyBox('⚠','加载失败',e.message) }
 }
+
+/* ===== 链接下载(yt-dlp:YouTube/TikTok/抖音/B站/微博等) ===== */
+let _ytPollTimer=null, _ytExtracted=null;
+async function openLinkDl(){
+  try{ const {dir}=await api('/api/ytdl/tasks'); const d=document.getElementById('ytDir'); if(d&&dir) d.textContent=dir; }catch(e){}
+  ytRenderTasks();
+  if(_ytPollTimer) clearInterval(_ytPollTimer);
+  _ytPollTimer=setInterval(ytRenderTasks, 1200);
+  const inp=document.getElementById('ytUrl');
+  if(inp && !inp._wired){ inp._wired=1; inp.addEventListener('keydown',e=>{ if(e.key==='Enter') ytExtract(); }); }
+}
+async function ytExtract(){
+  const url=(document.getElementById('ytUrl').value||'').trim();
+  const res=document.getElementById('ytResult');
+  if(!url){ uiAlert('把视频/主页/播放列表链接粘进来'); return; }
+  const btn=document.getElementById('ytExtractBtn'); btn.disabled=true; btn.textContent='解析中…';
+  res.innerHTML='<div class="empty">正在解析链接…(YouTube/TikTok 需连 VPN，稍等)</div>';
+  try{
+    const r=await api('/api/ytdl/extract','POST',{url});
+    _ytExtracted=r;
+    if(r.kind==='playlist') ytRenderPlaylist(r); else ytRenderVideo(r);
+  }catch(e){ res.innerHTML=emptyBox('⚠','解析失败',e.message); }
+  finally{ btn.disabled=false; btn.textContent='🔍 提取'; }
+}
+function _ytDur(s){ if(!s) return ''; s=Math.round(s); const m=Math.floor(s/60), ss=s%60; return m+':'+String(ss).padStart(2,'0'); }
+function ytRenderVideo(v){
+  document.getElementById('ytResult').innerHTML=`<div class="card" style="display:flex;gap:14px;align-items:center;padding:14px">
+    ${v.thumbnail?`<img src="${esc(v.thumbnail)}" referrerpolicy="no-referrer" style="width:150px;border-radius:8px;flex-shrink:0">`:''}
+    <div style="flex:1;min-width:0">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">${esc(v.title)}</div>
+      <div style="color:var(--sub);font-size:12.5px">${esc(v.uploader||'')} ${v.duration?'· '+_ytDur(v.duration):''}</div>
+    </div>
+    <button class="btn" onclick='ytDownload([${JSON.stringify(v.url)}])'>⬇ 下载</button>
+  </div>`;
+}
+function ytRenderPlaylist(pl){
+  const rows=pl.entries.map((e,i)=>`<label style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line)">
+    <input type="checkbox" class="ytpick" data-url="${esc(e.url)}" checked>
+    <span style="color:var(--dim);width:34px;flex-shrink:0">${i+1}</span>
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.title)}</span>
+    <span style="color:var(--sub);font-size:12px">${e.duration?_ytDur(e.duration):''}</span>
+  </label>`).join('');
+  document.getElementById('ytResult').innerHTML=`<div class="card" style="padding:12px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+      <b style="font-size:15px">${esc(pl.title)}</b>
+      <span style="color:var(--sub);font-size:12.5px">${esc(pl.uploader||'')} · 共 ${pl.count} 个</span>
+      <label style="margin-left:auto;font-size:13px;color:var(--sub)"><input type="checkbox" checked onchange="document.querySelectorAll('.ytpick').forEach(c=>c.checked=this.checked)"> 全选</label>
+      <button class="btn" onclick="ytDownloadPicked()">⬇ 下载所选</button>
+    </div>
+    <div style="max-height:360px;overflow:auto">${rows}</div>
+  </div>`;
+}
+function ytDownloadPicked(){
+  const urls=[...document.querySelectorAll('.ytpick:checked')].map(c=>c.dataset.url).filter(Boolean);
+  if(!urls.length){ uiAlert('没勾选任何视频'); return; }
+  ytDownload(urls);
+}
+async function ytDownload(urls){
+  const quality=document.getElementById('ytQuality').value;
+  try{
+    const r=await api('/api/ytdl/download','POST',{urls, quality});
+    toast('已加入下载队列：'+r.count+' 个');
+    ytRenderTasks();
+  }catch(e){ uiAlert(e.message||'下载失败'); }
+}
+async function ytRenderTasks(){
+  const wrap=document.getElementById('ytTasksWrap'); if(!wrap) return;
+  let tasks=[];
+  try{ const r=await api('/api/ytdl/tasks'); tasks=r.tasks||[]; }catch(e){ return; }
+  if(!tasks.length){ wrap.innerHTML=''; return; }
+  const rows=tasks.map(t=>{
+    const st={queued:'⏳ 排队',downloading:'⬇ 下载中',merging:'🔗 合并中',done:'✅ 完成',failed:'❌ 失败'}[t.status]||t.status;
+    const bar=(t.status==='downloading'||t.status==='merging')?`<div style="height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:4px"><div style="height:100%;width:${t.progress}%;background:var(--acc)"></div></div>`:'';
+    const meta=t.status==='downloading'?`${t.progress}% ${esc(t.speed||'')} ${esc(t.eta||'')}`:(t.status==='failed'?esc(t.err||''):'');
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">${esc(t.title)}</span>
+        <span style="font-size:12.5px;color:var(--sub);flex-shrink:0">${st}</span>
+      </div>${bar}
+      ${meta?`<div style="font-size:11.5px;color:var(--dim);margin-top:2px">${meta}</div>`:''}
+    </div>`;
+  }).join('');
+  wrap.innerHTML=`<div class="card" style="padding:12px">
+    <div style="display:flex;align-items:center;margin-bottom:6px">
+      <b style="font-size:14px">下载任务</b>
+      <button class="btn ghost" style="margin-left:auto;padding:3px 10px" onclick="api('/api/ytdl/clear','POST').then(ytRenderTasks)">清除已完成</button>
+    </div>${rows}
+  </div>`;
+}
+async function ytChangeDir(){
+  try{
+    let path='';
+    if(window.electronAPI && window.electronAPI.pickFolder){ const r=await window.electronAPI.pickFolder(); path=(r&&r.path)||''; }
+    else{ const d=await api('/api/pick_folder','POST'); path=(d&&d.path)||''; }
+    if(!path) return;
+    const r=await api('/api/ytdl/set_dir','POST',{path});
+    document.getElementById('ytDir').textContent=r.dir||path;
+  }catch(e){ uiAlert(e.message||'选择文件夹失败'); }
+}
+function ytOpenDir(){ api('/api/ytdl/open_dir','POST').catch(()=>{}); }
 
 function _grpSize(g){ return g.files.reduce((s,f)=>s+(f.size||0),0); }
 function _fmtMB(mb){ return mb>=1024?(mb/1024).toFixed(2)+' GB':mb.toFixed(1)+' MB'; }
@@ -3693,9 +3940,25 @@ async function saveRadar(){
 let curPosts=[], selectedIds=new Set(), curPostsSec=null;
 
 function gotoHome(){ document.querySelector('.nav a[data-page="home"]').click(); }
+function brMinimize(){ try{ if(window.electronAPI&&electronAPI.minimizeWindow) electronAPI.minimizeWindow(); }catch(e){} }
+function gotoBrowse(){ const a=document.querySelector('.nav a[data-page="browse"]'); if(a) a.click(); }
 
 async function openPosts(sec){
   const b=(curStatus?.bloggers||[]).find(x=>x.sec_user_id===sec);
+  // TikTok 的「作品列表」接口被官方反爬挡死(f2)→这个列表页会一直卡在"正在拉取"。
+  // 改成直接在内嵌浏览器打开 TA 主页——作品网格在那儿能正常看/刷(可见时才加载)。
+  if((b?.platform||PLATFORM)==='tiktok'){
+    const url=(b&&b.home_url) || (b&&b.unique_id?('https://www.tiktok.com/@'+b.unique_id):'');
+    document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
+    const nav=document.querySelector('.nav a[data-page="browse"]'); if(nav) nav.classList.add('on');
+    document.querySelectorAll('.page').forEach(s=>s.classList.remove('on'));
+    document.getElementById('page-browse').classList.add('on');
+    document.getElementById('pageTitle').textContent=titles.browse;
+    const tb=document.querySelector('.topbar'); if(tb) tb.style.display='flex';
+    openBrowse(url);
+    toast('TikTok 作品接口被反爬挡了→已在内嵌浏览器打开「'+((b&&b.nickname)||'TA')+'」主页，作品在这儿看');
+    return;
+  }
   curPostsSec=sec; selectedIds.clear();
   document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('on'));
   document.querySelectorAll('.page').forEach(s=>s.classList.remove('on'));
@@ -3819,8 +4082,9 @@ async function runDiscover(btn){
   try{
     let d;
     if(discSrc==='library'){
-      const n=(curStatus?.bloggers||[]).length;
-      if(!n){ uiAlert('你的库里还没有博主，先去「博主监控」加几个'); return; }
+      // 只数当前平台的博主：抖音tab查抖音的、TikTok tab查TikTok的(后端也只扫当前平台)
+      const n=(curStatus?.bloggers||[]).filter(b=>(b.platform||'douyin')===PLATFORM).length;
+      if(!n){ uiAlert('当前平台（'+(PLATFORM==='tiktok'?'TikTok':'抖音')+'）库里还没有博主，先去「博主监控」加几个'); return; }
       const maxPer=parseInt(document.getElementById('libDepth').value)||600;
       btn.disabled=true; btn.textContent='🔎 查找中…';
       grid.innerHTML=`<div class="empty"><div class="big">⏳</div>正在扫描库里 ${n} 个博主的最新作品并筛选…<br><span style="color:var(--dim);font-size:12px">每号最多抓 ${maxPer} 条，高产号+30天可能要几分钟，请耐心等</span></div>`;
@@ -3828,6 +4092,10 @@ async function runDiscover(btn){
       const win=hours?`${hours}h内`:'全部';
       let meta=`库内 ${d.bloggers} 个博主 · ${win}共 ${d.total} 条作品，折叠成 ${d.distinct||d.count} 部不同的剧/视频，取点赞最高的前 ${d.count}`;
       if((d.capped||[]).length) meta+=` · ⚠${d.capped.length}个高产号(${d.capped.slice(0,3).join('、')}${d.capped.length>3?'…':''})作品超过${d.max_per}条没抓全，想更全把「抓取深度」调大`;
+      // TikTok 的作品列表接口被反爬挡死(f2)→库内查找抓不到，如实告诉用户别干等
+      if(PLATFORM==='tiktok' && !d.total){
+        meta=`TikTok 的“作品列表+点赞”接口被官方反爬挡死，库内查找抓不到（和监控只能靠 videoCount 是同一原因）。TikTok 请去「浏览/加监控」或「博主监控」看博主主页。`;
+      }
       document.getElementById('discMeta').textContent=meta;
     }else{
       const seeds=document.getElementById('seedInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
@@ -4122,11 +4390,33 @@ function beep(){
   }catch(e){}
 }
 
-async function addBlogger(){
-  const inp=document.getElementById('urlInput'),btn=document.getElementById('addBtn');
-  if(!inp.value.trim())return;
+async function addBlogger(inpId, btnId){
+  const inp=document.getElementById(inpId||'urlInput'),btn=document.getElementById(btnId||'addBtn');
+  const raw=(inp.value||'').trim();
+  if(!raw)return;
+  if(PLATFORM==='tiktok'){
+    // TikTok 的 f2 接口被反爬挡死→和「浏览器里加监控」一样,用隐藏 webview 抓页面资料,不走后端 f2
+    if(!(window.electronAPI&&window.electronAPI.isElectron)){ uiAlert('TikTok 加监控要在桌面软件里用（需内嵌浏览器抓资料）。'); return; }
+    const m=raw.match(/https?:\/\/\S+/);
+    const url=m?m[0].replace(/[，。、）)\]】]+$/,''):'';
+    if(!/tiktok\.com\/@[\w.\-]/.test(url)){ uiAlert('请粘贴 TikTok 博主「主页」链接（形如 tiktok.com/@用户名）。\n也可以点上面「打开浏览器」进 TA 主页，再点「加入监控」。'); return; }
+    btn.disabled=true;btn.textContent='抓取中…';
+    try{
+      const wv=await _ensureTkAddWv(); if(!wv) throw new Error('内嵌浏览器不可用');   // 用「加监控」专用 webview，别和监控轮询抢
+      const s=await _tkScrapeProfileFast(wv,url);
+      if(!s||!s.secUid) throw new Error('没抓到博主资料。请先连好 VPN、并在「博主监控」页登录 TikTok；或确认这是 TA 的主页链接。');
+      await api('/api/bloggers/add_scraped','POST',{
+        platform:'tiktok', sec_uid:s.secUid, nickname:s.nickname||s.uniqueId||'',
+        unique_id:s.uniqueId||'', avatar:s.avatar||'', followers:s.followers||0,
+        video_count:s.videoCount||0, signature:s.signature||'', url:url, videos:s.videos||[]
+      });
+      inp.value=''; toast('✅ 已加入监控：'+(s.nickname||s.uniqueId||'该博主')); await refresh();
+    }catch(e){ _monitorAddCatch(e, s.nickname||s.uniqueId); }
+    btn.disabled=false;btn.textContent='➕ 添加监控';
+    return;
+  }
   btn.disabled=true;btn.textContent='解析中…';
-  try{ await api('/api/bloggers','POST',{url:inp.value,platform:PLATFORM}); inp.value=''; await refresh(); }
+  try{ await api('/api/bloggers','POST',{url:raw,platform:PLATFORM}); inp.value=''; await refresh(); }
   catch(e){ uiAlert(e.message); }
   btn.disabled=false;btn.textContent='➕ 添加监控';
 }
@@ -4374,11 +4664,18 @@ async function logout(){
 async function chooseDir(btn){
   const old=btn.textContent; btn.disabled=true; btn.textContent='选择中…';
   try{
-    const d=await api('/api/choose_dir','POST');
-    if(d.ok){ document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
+    if(window.electronAPI && window.electronAPI.pickFolder){        // Electron：原生文件夹对话框(和去重那些选文件夹一致)
+      const r=await window.electronAPI.pickFolder();
+      const path=(r&&r.path)||'';
+      if(path){ const d=await api('/api/set_dir','POST',{path}); document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
+      // path 为空=用户取消，不提示
+    }else{                                                          // pywebview 桌面版：后端弹框
+      const d=await api('/api/choose_dir','POST');
+      if(d.ok){ document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }
+    }
   }catch(e){
-    // 弹不出原生对话框时，用风格化输入框兜底
-    const p=await uiPrompt('选择文件夹失败，可直接粘贴一个文件夹路径：',{title:'下载保存位置',placeholder:'例如 D:\\抖音下载'});
+    // 都弹不出时，用风格化输入框兜底：直接粘贴路径
+    const p=await uiPrompt('选择文件夹没弹出来，可直接粘贴一个文件夹路径：',{title:'下载保存位置',placeholder:'例如 D:\\抖音下载'});
     if(p){ try{ const d=await api('/api/set_dir','POST',{path:p}); document.getElementById('dlDirText').textContent=d.download_dir; toast('已设置下载位置：'+d.download_dir); refresh(); }catch(err){ uiAlert(err.message); } }
   }
   btn.disabled=false; btn.textContent=old;
@@ -4401,12 +4698,111 @@ async function checkNow(btn){
   setTimeout(()=>{btn.disabled=false;btn.textContent='🔄 立即检查';refresh();},5000);
 }
 document.getElementById('urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')addBlogger()});
+{ const _bai=document.getElementById('brAddInput'); if(_bai) _bai.addEventListener('keydown',e=>{if(e.key==='Enter')addBlogger('brAddInput','brAddBtn')}); }
 
 async function refresh(){ try{ render(await api('/api/status')); }catch(e){} }
 applyPlatformLabels();   // 按上次选择的平台初始化文案/高亮
 refresh();
 setInterval(refresh,10000);
 checkUpdate(false);   // 每次打开自动检查一次更新（静默）
+
+/* ===== TikTok webview 监控 =====
+   TikTok 的 f2 接口被反爬彻底挡死(msToken/a_bogus)，后端根本抓不到作品列表。
+   改用一个「离屏隐藏」webview 定时把每个 TikTok 博主主页打开、抓页面里的
+   __UNIVERSAL_DATA__(视频网格+videoCount)，再 POST 给后端 /api/bloggers/tk_report
+   比对 seen 挑出新视频→记更新动态+弹窗。抖音有 f2 正常走后端，不用这套。 */
+const _TK_MON_INTERVAL_MS = 10*60*1000;   // 每 10 分钟轮一圈(TikTok 限流严，别太勤)
+const _TK_MON_GAP_MS      = 25*1000;      // 博主之间隔 25s，连点会触发"出错了"
+let _tkHiddenWv={}, _tkMonRunning=false;   // {mon:webview, add:webview}——监控轮询和"加监控"各用各的，绝不共用一个 webview(共用会同时导航互相打架、卡死"抓取中")
+function _tkLog(){ try{ console.log('[tkmon]',[].slice.call(arguments).map(x=>(x&&typeof x==='object')?JSON.stringify(x):String(x)).join(' ')); }catch(_){} }
+function _tkSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function _ensureHiddenTkWv(key){
+  return new Promise(res=>{
+    if(_tkHiddenWv[key]) return res(_tkHiddenWv[key]);
+    if(!(window.electronAPI&&window.electronAPI.isElectron)) return res(null);
+    const wv=document.createElement('webview');
+    wv.setAttribute('partition','persist:login_tiktok');   // 复用登录态
+    wv.setAttribute('useragent', CH_UA);
+    wv.setAttribute('src','about:blank');
+    // 离屏但真实渲染：放视口外(别用 display:none，否则页面不跑 JS、不加载视频网格)
+    wv.style.cssText='position:fixed;left:-5000px;top:0;width:1200px;height:900px;border:0;';
+    // 必须等 webview attach 完(dom-ready)再 loadURL，否则首次导航会被丢
+    const ready=()=>{ if(!_tkHiddenWv[key]){ _tkHiddenWv[key]=wv; _tkLog('[tkmon] webview ready', key); res(wv); } };
+    wv.addEventListener('dom-ready', ready, {once:true});
+    document.body.appendChild(wv);
+    setTimeout(ready, 8000);   // 兜底：dom-ready 万一没来
+  });
+}
+function _ensureTkMonWv(){ return _ensureHiddenTkWv('mon'); }   // 监控轮询专用
+function _ensureTkAddWv(){ return _ensureHiddenTkWv('add'); }   // 手动"加监控"抓资料专用
+function _tkWvGoto(wv,url,timeoutMs){
+  return new Promise(res=>{
+    let done=false;
+    const fin=ok=>{ if(done)return; done=true; try{wv.removeEventListener('did-stop-loading',onStop);}catch(_){}; res(ok); };
+    const onStop=()=>fin(true);
+    wv.addEventListener('did-stop-loading',onStop);
+    try{ wv.loadURL(url); }catch(e){ _tkLog('[tkmon] loadURL err',e); return fin(false); }
+    setTimeout(()=>fin(false), timeoutMs||25000);
+  });
+}
+async function _tkMonScrape(wv,url){
+  // 视频网格懒加载：滚到底触发 + 等一会，重试几次；限流("出错了")时至少也能拿到资料/videoCount
+  let last=null;
+  for(let attempt=0; attempt<2; attempt++){   // 网格空(可能"出错了")→整页重载再试一轮
+    _tkLog('[tkmon] goto', url, 'attempt', attempt);
+    const ok=await _tkWvGoto(wv,url,25000);
+    _tkLog('[tkmon] loaded?', ok);
+    if(!ok){ await _tkSleep(3000); continue; }
+    for(let i=0;i<4;i++){
+      try{ await wv.executeJavaScript('window.scrollTo(0,document.body.scrollHeight);void 0;'); }catch(_){}
+      await _tkSleep(2600);
+      const s=await _tkScrape(wv);
+      if(s&&s.secUid){ last=s;
+        if(i===0) _tkLog('[tkmon] page vis=',s.vis,'hasErr=',s.hasErr);
+        if((s.videos||[]).length) return s;
+      }
+    }
+    if(attempt===0) await _tkSleep(2500);
+  }
+  return last;
+}
+// 加监控用的「快抓」：拿到 secUid(资料)就返回,不等视频网格(离屏本来也抓不到网格)——交互加监控要快
+async function _tkScrapeProfileFast(wv,url){
+  if(!await _tkWvGoto(wv,url,25000)) return null;
+  for(let i=0;i<6;i++){
+    await _tkSleep(1400);
+    const s=await _tkScrape(wv);
+    if(s&&s.secUid) return s;
+  }
+  return await _tkScrape(wv);
+}
+async function tkMonPollOnce(){
+  if(_tkMonRunning) return;
+  if(!(window.electronAPI&&window.electronAPI.isElectron)) return;
+  let st; try{ st=await api('/api/status'); }catch(e){ return; }
+  const tks=(st.bloggers||[]).filter(b=>b.platform==='tiktok' && b.notify!==false);
+  _tkLog('[tkmon] poll start, tiktok bloggers=', tks.length);
+  if(!tks.length) return;
+  _tkMonRunning=true;
+  const wv=await _ensureTkMonWv(); if(!wv){ _tkLog('[tkmon] no webview'); _tkMonRunning=false; return; }
+  try{
+    for(const b of tks){
+      let url=b.home_url || (b.unique_id?('https://www.tiktok.com/@'+b.unique_id):'');
+      if(!/tiktok\.com\/@/.test(url||'')){ _tkLog('[tkmon] skip bad url', url); continue; }
+      let s=null; try{ s=await _tkMonScrape(wv,url); }catch(e){ _tkLog('[tkmon] scrape err',e); }
+      _tkLog('[tkmon] scraped', b.nickname, '-> secUid?', !!(s&&s.secUid), 'videos=', s&&s.videos?s.videos.length:0);
+      if(s&&s.secUid){
+        try{ const r=await api('/api/bloggers/tk_report','POST',{
+          sec_uid:s.secUid, platform:'tiktok', video_count:s.videoCount||0, videos:s.videos||[]
+        }); _tkLog('[tkmon] reported', b.nickname, JSON.stringify(r)); }catch(e){ _tkLog('[tkmon] report err',e); }
+      }
+      await _tkSleep(_TK_MON_GAP_MS);
+    }
+  }finally{ _tkMonRunning=false; }
+}
+window._tkMonPollOnce=tkMonPollOnce;   // 便于手动触发/调试
+// 开软件 20s 后先跑一圈，之后每 10 分钟一圈
+setTimeout(()=>{ tkMonPollOnce(); setInterval(tkMonPollOnce,_TK_MON_INTERVAL_MS); }, 20000);
 
 /* ===== 实名验证常驻提醒(不自动关):某号触发实名验证→自动停发+顶部红条+首次弹窗+一键批量重发 ===== */
 let _verifyAlerted=new Set();
